@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+
+  <!-- PWA / iOS native -->
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="Vitalux"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="theme-color" content="#050508" media="(prefers-color-scheme: dark)"/>
+  <meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)"/>
+  <meta name="description" content="Vitalux — AI-powered premium fitness tracker"/>
+
+  <title>Vitalux</title>
+
+  <link rel="manifest" href="manifest.json"/>
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png"/>
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png"/>
+  <link rel="stylesheet" href="style.css"/>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+</head>
+<body>
+
+<!-- ╔═══════════════════════════╗
+     ║  INSTALL BANNER          ║
+     ╚═══════════════════════════╝ -->
+<div id="install-banner" class="install-banner">
+  <div class="install-icon">📲</div>
+  <div class="install-text">
+    <div class="install-title">Add Vitalux to Home Screen</div>
+    <div class="install-sub">Works offline · Feels like a native app</div>
+  </div>
+  <button id="install-btn" class="install-btn">Install</button>
+  <button id="install-close" class="install-close">✕</button>
+</div>
+
+
+<!-- ╔═══════════════════════════╗
+     ║  SPLASH                  ║
+     ╚═══════════════════════════╝ -->
+<div id="splash" class="splash">
+  <div class="splash-icon">⚡</div>
+  <div class="splash-name">Vitalux</div>
+  <div class="splash-sub">AI Fitness · Premium</div>
+  <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+</div>
+
+
+<!-- ╔═══════════════════════════╗
+     ║  ONBOARDING              ║
+     ╚═══════════════════════════╝ -->
+<div id="onboarding" class="onboarding hidden">
+  <div class="ob-top">
+    <div class="ob-prog"><div class="ob-prog-fill" id="ob-progress-fill"></div></div>
+  </div>
+  <div class="ob-scroll">
+
+    <!-- Step 1 -->
+    <div class="ob-step">
+      <span class="ob-emoji">👋</span>
+      <h2 class="ob-title">Welcome to Vitalux</h2>
+      <p class="ob-sub">Let's personalise your experience. This takes 2 minutes.</p>
+      <div class="ob-field"><label>Your name</label><input id="ob-name" type="text" placeholder="e.g. Alex" autocomplete="given-name"/></div>
+      <div class="ob-row2">
+        <div class="ob-field"><label>Age</label><input id="ob-age" type="number" placeholder="25" min="10" max="100"/></div>
+        <div class="ob-field"><label>Gender</label>
+          <select id="ob-gender"><option value="">Select</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2 -->
+    <div class="ob-step">
+      <span class="ob-emoji">📏</span>
+      <h2 class="ob-title">Body Metrics</h2>
+      <p class="ob-sub">Used for BMR, TDEE and accurate calorie estimation.</p>
+      <div class="ob-row2">
+        <div class="ob-field"><label>Height (cm)</label><input id="ob-height" type="number" placeholder="170" min="100" max="250"/></div>
+        <div class="ob-field"><label>Weight (kg)</label><input id="ob-weight" type="number" placeholder="70" min="30" max="300" step="0.1"/></div>
+      </div>
+    </div>
+
+    <!-- Step 3 -->
+    <div class="ob-step">
+      <span class="ob-emoji">⚡</span>
+      <h2 class="ob-title">Activity Level</h2>
+      <p class="ob-sub">Your typical weekly activity helps calculate your daily energy needs.</p>
+      <div class="ob-field"><label>Activity level</label>
+        <select id="ob-activity">
+          <option value="">Select</option>
+          <option value="sedentary">Sedentary — desk job, minimal movement</option>
+          <option value="light">Lightly active — 1–2 workouts/week</option>
+          <option value="moderate" selected>Moderately active — 3–4 days/week</option>
+          <option value="active">Active — 5–6 days/week</option>
+          <option value="veryActive">Very active — athlete / physical job</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Step 4 -->
+    <div class="ob-step">
+      <span class="ob-emoji">🎯</span>
+      <h2 class="ob-title">Your Goal</h2>
+      <p class="ob-sub">This personalises your calorie targets and AI coaching.</p>
+      <div class="ob-field"><label>Primary goal</label>
+        <select id="ob-goal">
+          <option value="">Select</option>
+          <option value="lose">Lose weight / reduce body fat</option>
+          <option value="maintain">Maintain current weight</option>
+          <option value="gain">Build muscle / gain weight</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Step 5 -->
+    <div class="ob-step">
+      <span class="ob-emoji">👟</span>
+      <h2 class="ob-title">Daily Step Goal</h2>
+      <p class="ob-sub">WHO recommends 8,000–10,000 for most adults. You can change this anytime in Settings.</p>
+      <div class="ob-field"><label>Step goal</label>
+        <select id="ob-stepgoal">
+          <option value="5000">5,000 steps — Light activity</option>
+          <option value="7500">7,500 steps — Moderate</option>
+          <option value="8000" selected>8,000 steps — Recommended</option>
+          <option value="10000">10,000 steps — Active</option>
+          <option value="12000">12,000 steps — Very Active</option>
+          <option value="15000">15,000 steps — Athlete</option>
+        </select>
+      </div>
+    </div>
+
+  </div>
+  <div class="ob-footer">
+    <button id="ob-back" class="ob-btn" style="display:none">←</button>
+    <button id="ob-next" class="ob-btn">Continue →</button>
+  </div>
+</div>
+
+
+<!-- ╔═══════════════════════════╗
+     ║  MAIN APP                ║
+     ╚═══════════════════════════╝ -->
+<div id="app" class="hidden">
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="hdr-left">
+      <div class="hdr-top">Today</div>
+      <div id="greeting">Loading…</div>
+    </div>
+    <div class="hdr-avatar" id="header-avatar">V</div>
+  </header>
+
+  <!-- Swipe Viewport -->
+  <div id="swipe-viewport">
+    <div id="swipe-glow"></div>
+    <div id="swipe-container">
+
+      <!-- ── TAB 0: HOME ──────────────────────────────────────────── -->
+      <section class="tab-panel" id="tab-home">
+
+        <!-- Triple rings hero -->
+        <div class="home-hero">
+          <div class="rings-container" style="width:140px;height:140px;">
+            <svg class="rings-svg" width="140" height="140" viewBox="0 0 140 140">
+              <!-- tracks -->
+              <circle class="ring-track ring-outer-track" cx="70" cy="70" r="62"/>
+              <circle class="ring-track ring-mid-track"   cx="70" cy="70" r="46"/>
+              <circle class="ring-track ring-inner-track" cx="70" cy="70" r="30"/>
+              <!-- fills -->
+              <circle class="ring-fill" id="ring-steps"    cx="70" cy="70" r="62"/>
+              <circle class="ring-fill" id="ring-calories" cx="70" cy="70" r="46"/>
+              <circle class="ring-fill" id="ring-active"   cx="70" cy="70" r="30"/>
+            </svg>
+            <div class="ring-center">
+              <span class="home-pct" id="home-pct">0%</span>
+            </div>
+          </div>
+          <div style="flex:1;min-width:0;">
+            <div class="home-steps-val" id="home-steps">0</div>
+            <div class="home-steps-sub">steps · <span id="home-sg">/ 8,000</span></div>
+            <div class="home-motive" id="home-motive">Let's get moving!</div>
+          </div>
+        </div>
+
+        <!-- Streak card -->
+        <div class="streak-card">
+          <div class="streak-flame">🔥</div>
+          <div>
+            <div class="streak-val" id="home-streak">0</div>
+            <div class="streak-label">Day Streak</div>
+            <div class="streak-sub">Hit your goal to keep it alive</div>
+          </div>
+          <div style="margin-left:auto;">
+            <div id="streak-dots" class="streak-dots"></div>
+          </div>
+        </div>
+
+        <!-- Quick stats -->
+        <div class="stat-grid-2">
+          <div class="stat-tile">
+            <div class="stat-lbl">🔥 Burned</div>
+            <div class="stat-val c-orange" id="home-burned">0 kcal</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-lbl">🥗 Intake</div>
+            <div class="stat-val c-green" id="home-intake">0 kcal</div>
+          </div>
+        </div>
+
+      </section>
+
+
+      <!-- ── TAB 1: STEPS ────────────────────────────────────────── -->
+      <section class="tab-panel" id="tab-steps">
+
+        <div class="steps-hero">
+          <div class="steps-ring-wrap">
+            <svg class="rings-svg" width="200" height="200" viewBox="0 0 200 200">
+              <circle class="ring-track ring-outer-track" cx="100" cy="100" r="88" stroke-width="9"/>
+              <circle class="ring-fill" id="steps-ring-prog" cx="100" cy="100" r="88"/>
+            </svg>
+            <div class="ring-center">
+              <div class="steps-big-val" id="steps-count">0</div>
+              <div class="steps-goal-sub">/ <span id="steps-goal-n">8,000</span></div>
+              <div class="steps-pct-sub" id="steps-pct">0%</div>
+            </div>
+          </div>
+          <div id="steps-badge" class="badge badge-gray">◉ Inactive</div>
+          <button id="steps-toggle" class="steps-toggle-btn">▶ Resume</button>
+          <div class="steps-thresh">Adaptive threshold: <span id="steps-thresh">—</span></div>
+        </div>
+
+        <div class="stat-grid-3">
+          <div class="stat-tile">
+            <div class="stat-lbl">🔥 Burned</div>
+            <div class="stat-val c-orange" id="steps-burned">0 kcal</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-lbl">📍 Distance</div>
+            <div class="stat-val c-cyan" id="steps-dist">0.00 km</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-lbl">⏱ Active</div>
+            <div class="stat-val c-purple" id="steps-time">0 min</div>
+          </div>
+        </div>
+
+        <p class="section-title">This Week</p>
+        <div class="card card-p">
+          <div class="chart-wrap"><canvas id="chart-daily-steps"></canvas></div>
+        </div>
+
+        <p class="section-title">4-Week Trend</p>
+        <div class="card card-p">
+          <div class="chart-wrap"><canvas id="chart-weekly-steps"></canvas></div>
+        </div>
+
+      </section>
+
+
+      <!-- ── TAB 2: NUTRITION ─────────────────────────────────────── -->
+      <section class="tab-panel" id="tab-nutrition">
+
+        <div class="balance-hero">
+          <div class="balance-lbl">Today's Calorie Balance</div>
+          <div class="balance-val balanced" id="nutr-balance">0 kcal</div>
+          <div class="balance-goal" id="nutr-goal">— kcal daily target</div>
+        </div>
+
+        <p class="section-title">Log Intake</p>
+        <div class="nutr-input-row">
+          <input id="nutr-input" type="number" placeholder="Enter kcal consumed" min="0" max="9999"/>
+          <button id="nutr-save" class="btn-save">Log</button>
+        </div>
+
+        <div class="stat-grid-2">
+          <div class="stat-tile">
+            <div class="stat-lbl">🥗 Intake</div>
+            <div class="stat-val c-green" id="nutr-intake">0 kcal</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-lbl">🔥 Burned</div>
+            <div class="stat-val c-orange" id="nutr-burned">0 kcal</div>
+          </div>
+        </div>
+
+        <p class="section-title">Your Metabolism</p>
+        <div class="card card-p">
+          <div class="info-list">
+            <div class="info-row"><span class="info-lbl">Basal Metabolic Rate (BMR)</span><span class="info-val c-cyan" id="nutr-bmr">—</span></div>
+            <div class="info-row"><span class="info-lbl">Total Daily Energy (TDEE)</span><span class="info-val c-purple" id="nutr-tdee">—</span></div>
+            <div class="info-row"><span class="info-lbl">Daily Calorie Goal</span><span class="info-val c-green" id="nutr-goal-val">—</span></div>
+          </div>
+        </div>
+
+        <p class="section-title">7-Day History</p>
+        <div class="card card-p">
+          <div class="chart-wrap chart-wrap-tall"><canvas id="chart-calories"></canvas></div>
+        </div>
+
+      </section>
+
+
+      <!-- ── TAB 3: WEIGHT ────────────────────────────────────────── -->
+      <section class="tab-panel" id="tab-weight">
+
+        <p class="section-title" style="margin-top:4px;">Log Weight</p>
+        <div class="card card-p" style="margin-bottom:14px;">
+          <div class="wt-input-row">
+            <input id="wt-input" type="number" placeholder="e.g. 72.5 kg" step="0.1" min="20" max="300"/>
+            <button id="wt-log-btn" class="btn-log">+ Log</button>
+          </div>
+        </div>
+
+        <div class="bmi-card">
+          <div class="bmi-num" id="wt-bmi">—</div>
+          <div>
+            <div class="bmi-tag">Body Mass Index</div>
+            <div class="bmi-label" id="wt-bmi-label">—</div>
+            <div id="wt-trend" class="trend-badge trend-stable" style="margin-top:6px;">→ Stable</div>
+          </div>
+        </div>
+
+        <div class="stat-grid-2">
+          <div class="stat-tile">
+            <div class="stat-lbl">⚖️ Current</div>
+            <div class="stat-val c-cyan" id="wt-current">— kg</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-lbl">📅 Starting</div>
+            <div class="stat-val c-purple" id="wt-start">— kg</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-lbl">📈 2-Week Δ</div>
+            <div class="stat-val" id="wt-change">—</div>
+          </div>
+        </div>
+
+        <p class="section-title">30-Day Trend</p>
+        <div class="card card-p">
+          <div class="chart-wrap chart-wrap-tall"><canvas id="chart-weight"></canvas></div>
+        </div>
+
+      </section>
+
+
+      <!-- ── TAB 4: AI COACH ──────────────────────────────────────── -->
+      <section class="tab-panel" id="tab-ai">
+
+        <div class="ai-header">
+          <div class="ai-coach-label">✦ AI Coach</div>
+          <div class="ai-coach-title">Your Daily Coaching</div>
+          <div class="ai-coach-sub">Personalised insights from your steps, calories, weight and streak data.</div>
+        </div>
+
+        <div id="ai-chat"></div>
+
+      </section>
+
+
+      <!-- ── TAB 5: SUMMARY ───────────────────────────────────────── -->
+      <section class="tab-panel" id="tab-summary">
+
+        <p class="section-title" style="margin-top:4px;">Today at a Glance</p>
+        <div class="sum-today">
+          <div class="stat-tile">
+            <div class="stat-lbl">👟 Steps</div>
+            <div class="stat-val c-cyan" id="sum-steps">0</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-lbl">🔥 Burned</div>
+            <div class="stat-val c-orange" id="sum-burned">0 kcal</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-lbl">🥗 Intake</div>
+            <div class="stat-val c-green" id="sum-intake">0 kcal</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-lbl">🔥 Streak</div>
+            <div class="stat-val c-gold" id="sum-streak">0 days</div>
+          </div>
+        </div>
+
+        <p class="section-title">This Week's Steps</p>
+        <div class="card card-p">
+          <div class="chart-wrap"><canvas id="chart-summary-steps"></canvas></div>
+        </div>
+
+        <p class="section-title">Weekly Review</p>
+        <div class="weekly-summary-card" id="sum-text">
+          <p>Loading your weekly summary…</p>
+        </div>
+
+        <p class="section-title">Smart Insights</p>
+        <div id="sum-insights"></div>
+
+      </section>
+
+
+      <!-- ── TAB 6: SETTINGS ──────────────────────────────────────── -->
+      <section class="tab-panel" id="tab-settings">
+
+        <p class="section-title" style="margin-top:4px;">Settings</p>
+
+        <!-- Profile -->
+        <div class="set-group">
+          <div class="set-group-label">Profile</div>
+          <div class="set-row"><span class="set-row-label">Name</span><input id="set-name" type="text" placeholder="Your name"/></div>
+          <div class="set-row"><span class="set-row-label">Age</span><input id="set-age" type="number" placeholder="25"/></div>
+          <div class="set-row"><span class="set-row-label">Height (cm)</span><input id="set-height" type="number" placeholder="170"/></div>
+          <div class="set-row"><span class="set-row-label">Weight (kg)</span><input id="set-weight" type="number" placeholder="70" step="0.1"/></div>
+          <div class="set-row"><span class="set-row-label">Gender</span>
+            <select id="set-gender"><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select>
+          </div>
+        </div>
+
+        <!-- Goals -->
+        <div class="set-group">
+          <div class="set-group-label">Goals</div>
+          <div class="set-row"><span class="set-row-label">Fitness Goal</span>
+            <select id="set-goal"><option value="lose">Lose weight</option><option value="maintain">Maintain</option><option value="gain">Build muscle</option></select>
+          </div>
+          <div class="set-row"><span class="set-row-label">Activity Level</span>
+            <select id="set-activity">
+              <option value="sedentary">Sedentary</option><option value="light">Light</option>
+              <option value="moderate">Moderate</option><option value="active">Active</option><option value="veryActive">Very Active</option>
+            </select>
+          </div>
+          <div class="set-row"><span class="set-row-label">Step Goal</span><input id="set-stepgoal" type="number" placeholder="8000"/></div>
+          <div class="set-row"><span class="set-row-label">Calorie Goal</span><input id="set-calgoal" type="number" placeholder="2000"/></div>
+        </div>
+
+        <!-- Preferences -->
+        <div class="set-group">
+          <div class="set-group-label">Preferences</div>
+          <div class="set-row">
+            <span class="set-row-label">Light Mode</span>
+            <div class="toggle-switch" id="toggle-theme"></div>
+          </div>
+          <div class="set-row">
+            <span class="set-row-label">Step Tracking</span>
+            <div class="toggle-switch on" id="toggle-tracking"></div>
+          </div>
+        </div>
+
+        <!-- Save -->
+        <button id="set-save" class="set-btn set-btn-primary">Save Changes</button>
+
+        <!-- Data -->
+        <div class="set-group">
+          <div class="set-group-label">Data</div>
+          <div class="set-row" style="justify-content:center;">
+            <button id="btn-export" class="set-btn set-btn-export" style="margin:0;width:100%;border:none;">📦 Export Data (JSON)</button>
+          </div>
+          <div class="set-row" style="justify-content:center;">
+            <button id="btn-reset" class="set-btn set-btn-danger" style="margin:0;width:100%;border:none;">🗑 Reset All Data</button>
+          </div>
+        </div>
+
+        <div style="height:8px;"></div>
+
+      </section>
+
+    </div><!-- /swipe-container -->
+  </div><!-- /swipe-viewport -->
+
+  <!-- Bottom Floating Nav -->
+  <nav class="bottom-nav">
+    <div class="nav-pill">
+      <div class="nav-item active" data-idx="0"><div class="nav-icon">🏠</div><span class="nav-label">Home</span></div>
+      <div class="nav-item" data-idx="1"><div class="nav-icon">👟</div><span class="nav-label">Steps</span></div>
+      <div class="nav-item" data-idx="2"><div class="nav-icon">🥗</div><span class="nav-label">Nutrition</span></div>
+      <div class="nav-item" data-idx="3"><div class="nav-icon">⚖️</div><span class="nav-label">Weight</span></div>
+      <div class="nav-item" data-idx="4"><div class="nav-icon">✦</div><span class="nav-label">AI Coach</span></div>
+      <div class="nav-item" data-idx="5"><div class="nav-icon">📊</div><span class="nav-label">Summary</span></div>
+      <div class="nav-item" data-idx="6"><div class="nav-icon">⚙️</div><span class="nav-label">Settings</span></div>
+    </div>
+  </nav>
+
+</div><!-- /app -->
+
+
+<!-- Scripts -->
+<script src="storage.js"></script>
+<script src="motion.js"></script>
+<script src="ai.js"></script>
+<script src="charts.js"></script>
+<script src="main.js"></script>
+
+</body>
+</html>
