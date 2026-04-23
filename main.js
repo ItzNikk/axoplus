@@ -678,7 +678,7 @@ const App = (() => {
   function setGreeting() {
     const h=new Date().getHours();
     const t=h<5?'night':h<12?'morning':h<17?'afternoon':'evening';
-    const name=profile?.name?`, ${profile.name.split(' ')[0]}`:\';
+    const name=profile?.name?`, ${profile.name.split(' ')[0]}`:'';
     set('greeting', `Good ${t}${name}.`);
   }
 
