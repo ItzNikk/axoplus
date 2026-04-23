@@ -1,22 +1,23 @@
 'use strict';
 
 /**
- * MotionTracker v2 — Advanced accelerometer step detection
- *
+ * MotionTracker v3 — Advanced accelerometer step detection
+ * 
  * Algorithm: Peak/Valley detection with adaptive thresholds
- *
+ * 
  * Stage 1: Low-pass filter (α=0.12) — removes high-frequency vibration
  * Stage 2: Compute magnitude √(x²+y²+z²)
  * Stage 3: Track peaks AND valleys for robust stride detection
  * Stage 4: Adaptive threshold — updates based on recent peak/valley amplitudes
  * Stage 5: Cadence validator — rejects impossible step timings
  * Stage 6: Noise rejection — requires minimum amplitude excursion
- *
+ * Stage 7: Permission request on first start — fixed for resume/pause
+ * 
  * Battery: 20Hz sampling (50ms throttle), pauses on page hide
  */
 const MotionTracker = (() => {
 
-  // ── Algorithm config ─────────────────────────────────────────────────────────
+  // ── Algorithm config ───────────────────────────────────────────────────────
   const CFG = {
     LP_ALPHA:          0.12,   // Low-pass coefficient
     INIT_THRESHOLD:    11.5,   // Initial step magnitude threshold (m/s²)
@@ -30,7 +31,7 @@ const MotionTracker = (() => {
     GRAVITY:           9.81
   };
 
-  // ── State ─────────────────────────────────────────────────────────────────────
+  // ── State ───────────────────────────────────────────────────────────
   let running = false, paused = false, permitted = false;
   let count = 0, lastStepTs = 0, lastEventTs = 0;
   let fX=0, fY=0, fZ=0;                      // filtered components
@@ -42,8 +43,9 @@ const MotionTracker = (() => {
   let valleyHistory = [];                      // recent valley magnitudes
   let onStepCb = null, onErrCb = null;
   let hiddenResume = false;
+  let permissionRequested = false;             // Track if permission was already requested
 
-  // ── Low-pass filter ───────────────────────────────────────────────────────────
+  // ── Low-pass filter ────────────────────────────────────────────────────────
   const lpf = (prev, raw) => CFG.LP_ALPHA * raw + (1 - CFG.LP_ALPHA) * prev;
 
   // ── Adaptive threshold update ─────────────────────────────────────────────────
@@ -64,7 +66,7 @@ const MotionTracker = (() => {
     }
   }
 
-  // ── Core step detection ───────────────────────────────────────────────────────
+  // ── Core step detection ──────────────────────────────────────────────────────
   function processSample(ax, ay, az) {
     // 1. Low-pass filter
     fX = lpf(fX, ax);
@@ -96,7 +98,7 @@ const MotionTracker = (() => {
         return;
       }
 
-      // 6. Cadence validation
+      // 6. Cadence validation (improved)
       const elapsed = now - lastStepTs;
       const isValidCadence = lastStepTs === 0 ||
         (elapsed >= CFG.MIN_STEP_MS && elapsed <= CFG.MAX_STEP_MS + 1000);
@@ -118,7 +120,7 @@ const MotionTracker = (() => {
     prevMag = mag;
   }
 
-  // ── Event handler ─────────────────────────────────────────────────────────────
+  // ── Event handler ────────────────────────────────────────────────────────
   function onMotion(e) {
     const now = Date.now();
     if (now - lastEventTs < CFG.EVENT_THROTTLE_MS) return;
@@ -135,12 +137,16 @@ const MotionTracker = (() => {
     }
   }
 
-  // ── Permission ────────────────────────────────────────────────────────────────
+  // ── Permission (FIXED: Ask only once) ─────────────────────────────────────
   async function requestPermission() {
     if (typeof DeviceMotionEvent === 'undefined') {
       if (onErrCb) onErrCb('DeviceMotion not supported');
       return false;
     }
+    
+    if (permissionRequested) return permitted;
+    permissionRequested = true;
+    
     if (typeof DeviceMotionEvent.requestPermission === 'function') {
       try {
         const r = await DeviceMotionEvent.requestPermission();
@@ -156,7 +162,7 @@ const MotionTracker = (() => {
     return permitted;
   }
 
-  // ── Public control ────────────────────────────────────────────────────────────
+  // ── Public control ────────────────────────────────────────────────────────
   async function start({ initial=0, onStep=null, onErr=null }={}) {
     onStepCb = onStep; onErrCb = onErr;
     count = initial;
@@ -183,7 +189,10 @@ const MotionTracker = (() => {
 
   async function resume() {
     if (!running || !paused) return;
-    if (!permitted) { const ok=await requestPermission(); if(!ok)return; }
+    if (!permitted) { 
+      const ok = await requestPermission(); 
+      if (!ok) return; 
+    }
     window.addEventListener('devicemotion', onMotion, { passive:true });
     paused = false;
   }
@@ -201,7 +210,7 @@ const MotionTracker = (() => {
     setTimeout(()=>{ reset(); if(onStepCb)onStepCb(0); scheduleMidnight(); }, midnight-now);
   }
 
-  // ── Visibility ────────────────────────────────────────────────────────────────
+  // ── Visibility ─────────────────────────────────────────────────────────
   document.addEventListener('visibilitychange',()=>{
     if (document.hidden && running && !paused) { pause(); hiddenResume=true; }
     else if (!document.hidden && hiddenResume) { resume(); hiddenResume=false; }

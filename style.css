@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   VITALUX v2 — True iOS Liquid Glass Design System
+   VITALUX v3 — Liquid Glass Design with Enhanced Transparency
    Dark + Light mode · Physics nav · Premium micro-interactions
    ═══════════════════════════════════════════════════════════════ */
 
@@ -11,21 +11,22 @@
   --bg2:         #0a0a10;
   --bg3:         #0e0e18;
 
-  /* Glass layers */
-  --glass:       rgba(255,255,255,0.055);
-  --glass-2:     rgba(255,255,255,0.035);
-  --glass-hover: rgba(255,255,255,0.09);
-  --glass-border:rgba(255,255,255,0.10);
-  --glass-shine: rgba(255,255,255,0.20);
+  /* Glass layers - ENHANCED transparency */
+  --glass:       rgba(255,255,255,0.08);
+  --glass-2:     rgba(255,255,255,0.05);
+  --glass-hover: rgba(255,255,255,0.12);
+  --glass-border:rgba(255,255,255,0.12);
+  --glass-shine: rgba(255,255,255,0.25);
   --glass-deep:  rgba(0,0,0,0.35);
 
   --shadow:      0 8px 40px rgba(0,0,0,0.65), 0 2px 8px rgba(0,0,0,0.4);
   --shadow-sm:   0 4px 20px rgba(0,0,0,0.45);
   --shadow-glow: 0 0 32px rgba(0,212,255,0.18);
 
-  /* Nav */
-  --nav-glass:   rgba(10,10,18,0.80);
-  --nav-border:  rgba(255,255,255,0.10);
+  /* Nav - LIQUID GLASS with reflection */
+  --nav-glass:   rgba(10,10,18,0.60);
+  --nav-border:  rgba(255,255,255,0.15);
+  --nav-reflect: linear-gradient(180deg, rgba(255,255,255,0.15) 0%, transparent 50%);
 
   /* Text */
   --t1:  #FFFFFF;
@@ -42,9 +43,9 @@
   --gold:   #FFD60A;  --gold-d:  rgba(255,214,10,0.20);
 
   /* Blur */
-  --blur-sm: blur(12px) saturate(180%);
-  --blur-md: blur(24px) saturate(200%);
-  --blur-lg: blur(48px) saturate(220%);
+  --blur-sm: blur(16px) saturate(180%);
+  --blur-md: blur(28px) saturate(200%);
+  --blur-lg: blur(52px) saturate(220%);
 }
 
 /* ─── LIGHT MODE TOKENS ──────────────────────────────────────── */
@@ -53,19 +54,20 @@
   --bg2:         #FFFFFF;
   --bg3:         #E8E8ED;
 
-  --glass:       rgba(255,255,255,0.68);
-  --glass-2:     rgba(255,255,255,0.50);
-  --glass-hover: rgba(255,255,255,0.90);
-  --glass-border:rgba(0,0,0,0.09);
-  --glass-shine: rgba(255,255,255,0.90);
+  --glass:       rgba(255,255,255,0.72);
+  --glass-2:     rgba(255,255,255,0.55);
+  --glass-hover: rgba(255,255,255,0.92);
+  --glass-border:rgba(0,0,0,0.10);
+  --glass-shine: rgba(255,255,255,0.95);
   --glass-deep:  rgba(0,0,0,0.06);
 
   --shadow:      0 4px 24px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.08);
   --shadow-sm:   0 2px 12px rgba(0,0,0,0.10);
   --shadow-glow: 0 0 20px rgba(0,140,255,0.15);
 
-  --nav-glass:   rgba(255,255,255,0.82);
-  --nav-border:  rgba(0,0,0,0.09);
+  --nav-glass:   rgba(255,255,255,0.85);
+  --nav-border:  rgba(0,0,0,0.10);
+  --nav-reflect: linear-gradient(180deg, rgba(255,255,255,0.4) 0%, transparent 50%);
 
   --t1:  #111111;
   --t2:  rgba(0,0,0,0.60);
@@ -259,7 +261,7 @@ body::before {
   background:radial-gradient(ellipse at left center, rgba(0,212,255,0.18), transparent 70%);
 }
 
-/* ─── Floating Pill Nav ──────────────────────────────────────── */
+/* ─── Floating Pill Nav with LIQUID GLASS + REFLECTION ───────────────── */
 .bottom-nav {
   position:absolute; bottom:0; left:0; right:0; z-index:50;
   display:flex; justify-content:center;
@@ -276,11 +278,26 @@ body::before {
   box-shadow:0 8px 40px rgba(0,0,0,0.45), 0 1px 0 var(--glass-shine) inset;
   pointer-events:all;
   overflow:hidden;
+  position:relative;
 }
+
+/* LIQUID GLASS reflection */
+.nav-pill::before {
+  content:'';
+  position:absolute;
+  top:0; left:0; right:0;
+  height:50%;
+  background: var(--nav-reflect);
+  border-radius:31px 31px 0 0;
+  pointer-events:none;
+  opacity:0.5;
+}
+
 .nav-item {
   flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
   gap:3px; padding:8px 4px; cursor:pointer;
   -webkit-tap-highlight-color:transparent; transition:all 0.2s ease;
+  position:relative; z-index:1;
 }
 .nav-icon { font-size:18px; transition:transform 0.25s cubic-bezier(0.34,1.56,0.64,1); }
 .nav-label { font-size:9px; font-weight:600; letter-spacing:0.3px; color:var(--t3); transition:color 0.2s; white-space:nowrap; }

@@ -1,15 +1,16 @@
 'use strict';
 
 /**
- * Vitalux v2 — Main Application Controller
+ * Vitalux v3 — Main Application Controller
  *
  * Tabs: Home · Steps · Nutrition · Weight · AI Coach · Summary · Settings
  * Navigation: Physics-based swipe + tap bottom nav
  * Features: Streaks, Goals, Light/Dark mode, Install prompt, Export, Reset
+ * NEW: Fixed resume/pause, motion permission on first start, refined step logic
  */
 const App = (() => {
 
-  // ── App state ─────────────────────────────────────────────────────────────────
+  // ── App state ──────────────────────────────────────────────────────────
   let profile   = null;
   let goals     = null;
   let calData   = { intake:0, burned:0 };
@@ -25,7 +26,7 @@ const App = (() => {
   const TAB_COUNT = 7;
   const TAB_IDS   = ['home','steps','nutrition','weight','ai','summary','settings'];
 
-  // ── Swipe state ───────────────────────────────────────────────────────────────
+  // ── Swipe state ─────────────────────────────────────────────────────────
   let swipeStartX=0, swipeStartY=0, swipeDeltaX=0;
   let isHSwipe=false, isVScroll=false;
   let swipeVel=0, lastTouchX=0, lastTouchTime=0;
@@ -33,9 +34,9 @@ const App = (() => {
   // ── DOM refs (cached after DOMContentLoaded) ──────────────────────────────────
   let slider, viewport;
 
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   // INIT
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   async function init() {
     slider   = document.getElementById('swipe-container');
     viewport = document.getElementById('swipe-viewport');
@@ -81,9 +82,9 @@ const App = (() => {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   // ONBOARDING
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   let obStep = 0;
 
   function initOnboarding() {
@@ -140,14 +141,14 @@ const App = (() => {
     setTimeout(()=>{ ob.style.display='none'; app.classList.remove('hidden'); launchApp(); }, 400);
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   // LAUNCH
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   async function launchApp() {
     calData = await StorageManager.getTodayCalories();
     streak  = await StorageManager.calculateStreak();
 
-    // Start motion tracking
+    // Start motion tracking (permission asked on first call)
     const initSteps = await StorageManager.getTodaySteps();
     await MotionTracker.start({
       initial: initSteps,
@@ -171,9 +172,9 @@ const App = (() => {
     saveTimer = setInterval(autoPersist, 15000);
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   // SWIPE NAVIGATION (Physics-based)
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   function initSwipe() {
     viewport.addEventListener('touchstart', onTouchStart, { passive:true });
     viewport.addEventListener('touchmove',  onTouchMove,  { passive:false });
@@ -254,9 +255,9 @@ const App = (() => {
     if (g) g.style.opacity='0';
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   // NAVIGATION
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   function initNav() {
     document.querySelectorAll('.nav-item').forEach(item => {
       item.addEventListener('click', () => {
@@ -284,9 +285,9 @@ const App = (() => {
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   // TAB RENDERS
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   async function renderTab(idx) {
     switch(TAB_IDS[idx]) {
       case 'home':       await renderHome();       break;
@@ -299,7 +300,7 @@ const App = (() => {
     }
   }
 
-  // ── HOME ──────────────────────────────────────────────────────────────────────
+  // ── HOME ───────────────────────────────────────────────────────────
   async function renderHome() {
     const steps  = MotionTracker.count;
     const sg     = goals.stepGoal || 8000;
@@ -348,7 +349,7 @@ const App = (() => {
     el.style.strokeDashoffset = c*(1-Math.min(pct,1));
   }
 
-  // ── STEPS ─────────────────────────────────────────────────────────────────────
+  // ── STEPS ───────────────────────────────────────────────────────────
   async function renderSteps() {
     const steps  = MotionTracker.count;
     const sg     = goals.stepGoal || 8000;
@@ -396,7 +397,7 @@ const App = (() => {
     await renderSteps();
   }
 
-  // ── NUTRITION ─────────────────────────────────────────────────────────────────
+  // ── NUTRITION ─────────────────────────────────────────────────────────
   async function renderNutrition() {
     const steps  = MotionTracker.count;
     const burned = AICoach.caloriesBurned(steps, profile.weight, profile.activityLevel);
@@ -437,7 +438,7 @@ const App = (() => {
     if (window.Chart) await ChartsManager.calories('chart-calories');
   }
 
-  // ── WEIGHT ────────────────────────────────────────────────────────────────────
+  // ── WEIGHT ──────────────────────────────────────────────────────────
   async function renderWeight() {
     const history = await StorageManager.getWeightHistory(30);
     const trend   = await StorageManager.getWeightTrend();
@@ -475,7 +476,7 @@ const App = (() => {
     if (window.Chart) await ChartsManager.weightTrend('chart-weight');
   }
 
-  // ── AI COACH ──────────────────────────────────────────────────────────────────
+  // ── AI COACH ──────────────────────────────────────────────────────────
   async function renderAICoach() {
     // Only start a new session if not already running
     if (aiTimer !== null) return;
@@ -545,7 +546,7 @@ const App = (() => {
     chatEl.scrollTop = chatEl.scrollHeight;
   }
 
-  // ── SUMMARY ───────────────────────────────────────────────────────────────────
+  // ── SUMMARY ──────────────────────────────────────────────────────────
   async function renderSummary() {
     const [wTrend, weekInsights] = await Promise.all([
       StorageManager.getWeightTrend(), StorageManager.getWeeklyInsights()
@@ -582,7 +583,7 @@ const App = (() => {
     if (window.Chart) await ChartsManager.summarySteps('chart-summary-steps');
   }
 
-  // ── SETTINGS ─────────────────────────────────────────────────────────────────
+  // ── SETTINGS ──────────────────────────────────────────────────────────
   function renderSettings() {
     // Pre-fill profile fields
     const fields = { 'set-name':profile.name, 'set-age':profile.age,
@@ -667,9 +668,9 @@ const App = (() => {
     location.reload();
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   // UTILITIES
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   function set(id, text) { const el=document.getElementById(id); if(el) el.textContent=text; }
 
   function calorieData() { return calData; }
@@ -677,7 +678,7 @@ const App = (() => {
   function setGreeting() {
     const h=new Date().getHours();
     const t=h<5?'night':h<12?'morning':h<17?'afternoon':'evening';
-    const name=profile?.name?`, ${profile.name.split(' ')[0]}`:'';
+    const name=profile?.name?`, ${profile.name.split(' ')[0]}`:\';
     set('greeting', `Good ${t}${name}.`);
   }
 
@@ -700,13 +701,13 @@ const App = (() => {
     if(window.Chart) ChartsManager.setupDefaults();
   }
 
-  // ── Step callback ──────────────────────────────────────────────────────────────
+  // ── Step callback ────────────────────────────────────────────────────────
   function onStepUpdate(count) {
     if (tabIndex===0) requestAnimationFrame(renderHome);
     else if (tabIndex===1) requestAnimationFrame(renderSteps);
   }
 
-  // ── Auto-persist steps ────────────────────────────────────────────────────────
+  // ── Auto-persist steps ──────────────────────────────────────────────────────
   async function autoPersist() {
     const count = MotionTracker.count;
     if (count !== lastSaved) {
@@ -718,7 +719,7 @@ const App = (() => {
     }
   }
 
-  // ── Install banner ────────────────────────────────────────────────────────────
+  // ── Install banner ────────────────────────────────────────────────────────
   function showInstallBanner() {
     const banner = document.getElementById('install-banner');
     if (!banner) return;
@@ -739,7 +740,7 @@ const App = (() => {
     });
   }
 
-  // ── Toast ──────────────────────────────────────────────────────────────────────
+  // ── Toast ───────────────────────────────────────────────────────────
   function toast(msg, dur=2800) {
     document.querySelector('.toast')?.remove();
     const el = document.createElement('div');
