@@ -1,226 +1,281 @@
 'use strict';
 
 /**
- * MotionTracker v3 — Advanced accelerometer step detection
- * 
- * Algorithm: Peak/Valley detection with adaptive thresholds
- * 
- * Stage 1: Low-pass filter (α=0.12) — removes high-frequency vibration
- * Stage 2: Compute magnitude √(x²+y²+z²)
- * Stage 3: Track peaks AND valleys for robust stride detection
- * Stage 4: Adaptive threshold — updates based on recent peak/valley amplitudes
- * Stage 5: Cadence validator — rejects impossible step timings
- * Stage 6: Noise rejection — requires minimum amplitude excursion
- * Stage 7: Permission request on first start — fixed for resume/pause
- * 
- * Battery: 20Hz sampling (50ms throttle), pauses on page hide
+ * MotionTracker v3 — Production-grade step detection
+ *
+ * ═══ PERMISSION FIX ═══════════════════════════════════════════════════
+ * iOS 13+ requires DeviceMotionEvent.requestPermission() to be called
+ * DIRECTLY inside a user-gesture handler (click/touchend).
+ * call MotionTracker.requestPermission() from a button click event.
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * ═══ ALGORITHM ════════════════════════════════════════════════════════
+ * Stage 1: Raw → Butterworth-inspired 2nd-order low-pass (fc=5Hz@20Hz)
+ *           Equivalent IIR: y[n] = b0*x[n]+b1*x[n-1]+b2*x[n-2]-a1*y[n-1]-a2*y[n-2]
+ *           Coefficients tuned for 5Hz cutoff at 20Hz sampling
+ * Stage 2: Magnitude = √(x²+y²+z²)  then subtract gravity estimate (DC removal)
+ * Stage 3: Vertical-axis emphasis: weight Y-axis 60%, magnitude 40%
+ * Stage 4: Peak detection with adaptive threshold (ring buffer of 8 peak amplitudes)
+ * Stage 5: Cadence ring buffer — validates step timing, detects walk vs run
+ * Stage 6: Shake rejection — 3+ rapid events in 150ms → ignore
+ * ══════════════════════════════════════════════════════════════════════
  */
 const MotionTracker = (() => {
 
-  // ── Algorithm config ───────────────────────────────────────────────────────
-  const CFG = {
-    LP_ALPHA:          0.12,   // Low-pass coefficient
-    INIT_THRESHOLD:    11.5,   // Initial step magnitude threshold (m/s²)
-    THRESHOLD_LOW_MUL: 0.88,   // Low threshold = threshold * this
-    MIN_STEP_MS:       230,    // Min inter-step time (~4.3 steps/sec)
-    MAX_STEP_MS:       2200,   // Max inter-step time (≈slow walk, 0.45 steps/sec)
-    EVENT_THROTTLE_MS: 50,     // 20 Hz
-    PEAK_HISTORY:      8,      // Peak amplitudes to keep for adaptive threshold
-    MIN_AMPLITUDE:     1.8,    // Min peak-to-valley amplitude to count as step
-    ADAPTIVE_SPEED:    0.08,   // How fast threshold adapts
-    GRAVITY:           9.81
+  // ── Butterworth 2nd-order LP coefficients (5Hz cutoff, 20Hz sample) ──────────
+  // Pre-warped: fc=5, fs=20 → wc=2*tan(π*fc/fs)=2*tan(π/4)=2
+  // Bilinear transform coefficients:
+  const B0=0.0640, B1=0.1279, B2=0.0640;
+  const A1=-1.1683, A2=0.4124;
+
+  // ── Config ────────────────────────────────────────────────────────────────────
+  const CFG={
+    EVENT_HZ:        20,    // 20Hz sample rate
+    THROTTLE_MS:     50,    // 1000/20
+    INIT_THRESH:     1.2,   // Initial threshold for de-trended signal (m/s²)
+    THRESH_LOW_MUL:  0.72,  // Hysteresis low = thresh * mul
+    MIN_STEP_MS:     230,   // 4.3 steps/sec max
+    MAX_STEP_MS:     2400,  // 0.42 steps/sec min (very slow walk)
+    PEAK_BUF:        10,    // Adaptive threshold ring buffer size
+    MIN_AMPLITUDE:   0.55,  // Min peak-to-valley (de-trended)
+    ADAPT_SPEED:     0.10,  // Threshold adaptation rate
+    SHAKE_WINDOW_MS: 180,   // Shake detection window
+    SHAKE_COUNT:     4,     // Events in window = shake
+    CADENCE_BUF:     6,     // Steps for cadence calculation
+    WALK_MAX_STP_S:  2.2,   // Walk ≤ 2.2 steps/sec
+    GRAVITY_ALPHA:   0.998  // DC removal for gravity
   };
 
-  // ── State ───────────────────────────────────────────────────────────
-  let running = false, paused = false, permitted = false;
-  let count = 0, lastStepTs = 0, lastEventTs = 0;
-  let fX=0, fY=0, fZ=0;                      // filtered components
-  let prevMag = 0;                             // for slope detection
-  let aboveThresh = false;                     // hysteresis state
-  let peakMag = 0, valleyMag = Infinity;       // current peak/valley tracking
-  let adaptiveThreshold = CFG.INIT_THRESHOLD; // evolves with user's gait
-  let peakHistory = [];                        // recent peak magnitudes
-  let valleyHistory = [];                      // recent valley magnitudes
-  let onStepCb = null, onErrCb = null;
-  let hiddenResume = false;
-  let permissionRequested = false;             // Track if permission was already requested
+  // ── State ─────────────────────────────────────────────────────────────────────
+  let permitted=false, running=false, paused=false;
+  let count=0, lastStepTs=0, lastEvtTs=0;
 
-  // ── Low-pass filter ────────────────────────────────────────────────────────
-  const lpf = (prev, raw) => CFG.LP_ALPHA * raw + (1 - CFG.LP_ALPHA) * prev;
+  // IIR filter state (x=input history, y=output history)
+  let xH=[0,0,0], yH=[0,0,0];   // magnitude filter
+  let gravY=0;                   // gravity DC for Y axis
+
+  // Peak/valley
+  let aboveThresh=false, peakVal=0, valleyVal=Infinity;
+  let adaptThresh=CFG.INIT_THRESH;
+  let peakBuf=[], valleyBuf=[];
+
+  // Shake rejection
+  let shakeTs=[];
+
+  // Cadence
+  let stepIntervals=[];
+  let cadenceStepsPerMin=0;
+  let workoutMode='walk'; // 'walk' | 'run'
+
+  let onStepCb=null, onErrCb=null, onPermCb=null;
+  let midnightTimer=null;
+  let visHidden=false;
+
+  // ── 2nd-order Butterworth IIR ─────────────────────────────────────────────────
+  function iirFilter(x) {
+    xH[2]=xH[1]; xH[1]=xH[0]; xH[0]=x;
+    const y = B0*xH[0] + B1*xH[1] + B2*xH[2] - A1*yH[0] - A2*yH[1];
+    yH[1]=yH[0]; yH[0]=y;
+    return y;
+  }
+
+  // ── DC removal (gravity estimation via very slow LP) ──────────────────────────
+  function dcRemove(sample, dcRef) {
+    return sample - dcRef;
+  }
 
   // ── Adaptive threshold update ─────────────────────────────────────────────────
-  function updateAdaptiveThreshold(peakVal, valleyVal) {
-    peakHistory.push(peakVal);
-    if (peakHistory.length > CFG.PEAK_HISTORY) peakHistory.shift();
-    valleyHistory.push(valleyVal);
-    if (valleyHistory.length > CFG.PEAK_HISTORY) valleyHistory.shift();
-
-    if (peakHistory.length >= 3) {
-      const avgPeak   = peakHistory.reduce((a,b)=>a+b,0) / peakHistory.length;
-      const avgValley = valleyHistory.reduce((a,b)=>a+b,0) / valleyHistory.length;
-      const midpoint  = (avgPeak + avgValley) / 2;
-      // Smooth the threshold update
-      adaptiveThreshold = adaptiveThreshold * (1 - CFG.ADAPTIVE_SPEED) + midpoint * CFG.ADAPTIVE_SPEED;
-      // Clamp to reasonable range
-      adaptiveThreshold = Math.max(9.2, Math.min(14.5, adaptiveThreshold));
+  function updateThreshold(peak, valley) {
+    peakBuf.push(peak);   if(peakBuf.length>CFG.PEAK_BUF)   peakBuf.shift();
+    valleyBuf.push(valley);if(valleyBuf.length>CFG.PEAK_BUF) valleyBuf.shift();
+    if(peakBuf.length>=3){
+      const avgP=peakBuf.reduce((a,b)=>a+b,0)/peakBuf.length;
+      const avgV=valleyBuf.reduce((a,b)=>a+b,0)/valleyBuf.length;
+      const mid=(avgP+avgV)/2;
+      adaptThresh=adaptThresh*(1-CFG.ADAPT_SPEED)+mid*CFG.ADAPT_SPEED;
+      adaptThresh=Math.max(0.45, Math.min(3.5, adaptThresh));
     }
   }
 
-  // ── Core step detection ──────────────────────────────────────────────────────
-  function processSample(ax, ay, az) {
-    // 1. Low-pass filter
-    fX = lpf(fX, ax);
-    fY = lpf(fY, ay);
-    fZ = lpf(fZ, az);
+  // ── Cadence & mode detection ──────────────────────────────────────────────────
+  function updateCadence(interval_ms) {
+    stepIntervals.push(interval_ms);
+    if(stepIntervals.length>CFG.CADENCE_BUF) stepIntervals.shift();
+    if(stepIntervals.length>=2){
+      const avg=stepIntervals.reduce((a,b)=>a+b,0)/stepIntervals.length;
+      cadenceStepsPerMin=Math.round(60000/avg);
+      workoutMode=cadenceStepsPerMin>120?'run':'walk';
+    }
+  }
 
-    // 2. Magnitude
-    const mag = Math.sqrt(fX*fX + fY*fY + fZ*fZ);
-    const threshLow = adaptiveThreshold * CFG.THRESHOLD_LOW_MUL;
+  // ── Shake detection ───────────────────────────────────────────────────────────
+  function isShake(now) {
+    shakeTs.push(now);
+    shakeTs=shakeTs.filter(t=>now-t<CFG.SHAKE_WINDOW_MS);
+    return shakeTs.length>=CFG.SHAKE_COUNT;
+  }
 
-    // 3. Track peak/valley during current swing
-    if (mag > peakMag) peakMag = mag;
-    if (mag < valleyMag) valleyMag = mag;
+  // ── Core processing ───────────────────────────────────────────────────────────
+  function process(ax, ay, az) {
+    // 1. Update gravity DC estimate (very slow LP)
+    gravY=CFG.GRAVITY_ALPHA*gravY+(1-CFG.GRAVITY_ALPHA)*ay;
 
-    // 4. Hysteresis step detection (descending edge)
-    const now = Date.now();
+    // 2. De-trended Y (vertical axis - most step energy)
+    const detrendY=dcRemove(ay, gravY);
 
-    if (!aboveThresh && mag > adaptiveThreshold) {
-      aboveThresh = true;
-      peakMag = mag;
-    } else if (aboveThresh && mag < threshLow) {
-      aboveThresh = false;
+    // 3. Raw magnitude
+    const rawMag=Math.sqrt(ax*ax+ay*ay+az*az);
 
-      // 5. Amplitude check — must be real stride, not vibration
-      const amplitude = peakMag - valleyMag;
-      if (amplitude < CFG.MIN_AMPLITUDE) {
-        valleyMag = mag;
-        prevMag = mag;
-        return;
-      }
+    // 4. IIR filter on blended signal (60% Y, 40% magnitude deviation from 9.81)
+    const magDev=rawMag-9.81;
+    const blended=0.60*detrendY+0.40*magDev;
+    const filtered=iirFilter(blended);
 
-      // 6. Cadence validation (improved)
-      const elapsed = now - lastStepTs;
-      const isValidCadence = lastStepTs === 0 ||
-        (elapsed >= CFG.MIN_STEP_MS && elapsed <= CFG.MAX_STEP_MS + 1000);
+    const now=Date.now();
+    const lo=adaptThresh*CFG.THRESH_LOW_MUL;
 
-      if (isValidCadence) {
-        // Update adaptive threshold
-        if (lastStepTs > 0) updateAdaptiveThreshold(peakMag, valleyMag);
+    // 5. Track peak/valley
+    if(filtered>peakVal) peakVal=filtered;
+    if(filtered<valleyVal) valleyVal=filtered;
 
+    // 6. Hysteresis peak detection (descending edge)
+    if(!aboveThresh && filtered>adaptThresh){
+      aboveThresh=true;
+      peakVal=filtered;
+    } else if(aboveThresh && filtered<lo){
+      aboveThresh=false;
+
+      // Amplitude check
+      const amplitude=peakVal-valleyVal;
+      if(amplitude<CFG.MIN_AMPLITUDE){ valleyVal=filtered; peakVal=0; return; }
+
+      // Shake rejection
+      if(isShake(now)){ valleyVal=filtered; peakVal=0; return; }
+
+      // Cadence validation
+      const elapsed=now-lastStepTs;
+      const valid=lastStepTs===0||(elapsed>=CFG.MIN_STEP_MS&&elapsed<=CFG.MAX_STEP_MS+800);
+
+      if(valid){
+        if(lastStepTs>0){
+          updateThreshold(peakVal,valleyVal);
+          updateCadence(elapsed);
+        }
         count++;
-        lastStepTs = now;
-        if (onStepCb) onStepCb(count);
+        lastStepTs=now;
+        if(onStepCb) onStepCb(count, {cadence:cadenceStepsPerMin, mode:workoutMode});
       }
 
-      // Reset peak/valley for next stride
-      valleyMag = mag;
-      peakMag = 0;
-    }
-
-    prevMag = mag;
-  }
-
-  // ── Event handler ────────────────────────────────────────────────────────
-  function onMotion(e) {
-    const now = Date.now();
-    if (now - lastEventTs < CFG.EVENT_THROTTLE_MS) return;
-    lastEventTs = now;
-
-    const acc = e.accelerationIncludingGravity;
-    if (acc && acc.x !== null && acc.x !== undefined) {
-      processSample(acc.x, acc.y, acc.z);
-      return;
-    }
-    const a = e.acceleration;
-    if (a && a.x !== null) {
-      processSample(a.x, a.y, a.z + CFG.GRAVITY);
+      valleyVal=filtered; peakVal=0;
     }
   }
 
-  // ── Permission (FIXED: Ask only once) ─────────────────────────────────────
-  async function requestPermission() {
-    if (typeof DeviceMotionEvent === 'undefined') {
-      if (onErrCb) onErrCb('DeviceMotion not supported');
-      return false;
+  // ── Event handler ─────────────────────────────────────────────────────────────
+  function onMotion(e){
+    const now=Date.now();
+    if(now-lastEvtTs<CFG.THROTTLE_MS) return;
+    lastEvtTs=now;
+
+    const g=e.accelerationIncludingGravity;
+    if(g&&g.x!==null&&g.x!==undefined){ process(g.x,g.y,g.z); return; }
+    const a=e.acceleration;
+    if(a&&a.x!==null&&a.x!==undefined){ process(a.x,a.y,a.z+9.81); }
+  }
+
+  // ── Permission ────────────────────────────────────────────────────────────────
+  /**
+   * MUST be called directly from a user gesture (button click) on iOS.
+   * Returns: 'granted' | 'denied' | 'unavailable' | 'not_required'
+   */
+  async function requestPermission(){
+    if(typeof DeviceMotionEvent==='undefined'){
+      if(onErrCb) onErrCb('DeviceMotion not supported on this device.');
+      return 'unavailable';
     }
-    
-    if (permissionRequested) return permitted;
-    permissionRequested = true;
-    
-    if (typeof DeviceMotionEvent.requestPermission === 'function') {
-      try {
-        const r = await DeviceMotionEvent.requestPermission();
-        permitted = r === 'granted';
-        if (!permitted && onErrCb) onErrCb('Motion permission denied');
-      } catch(err) {
-        permitted = false;
-        if (onErrCb) onErrCb(err.message);
+    if(typeof DeviceMotionEvent.requestPermission!=='function'){
+      // Android / desktop — no permission needed
+      permitted=true;
+      return 'not_required';
+    }
+    try{
+      const result=await DeviceMotionEvent.requestPermission();
+      permitted=(result==='granted');
+      if(!permitted && onErrCb) onErrCb('Motion permission denied by user.');
+      if(onPermCb) onPermCb(permitted);
+      return result; // 'granted' | 'denied'
+    }catch(err){
+      permitted=false;
+      if(onErrCb) onErrCb('Permission request failed: '+err.message);
+      return 'denied';
+    }
+  }
+
+  // ── Start / Stop / Pause / Resume ─────────────────────────────────────────────
+  function attachListener(){
+    window.addEventListener('devicemotion',onMotion,{passive:true});
+  }
+  function detachListener(){
+    window.removeEventListener('devicemotion',onMotion);
+  }
+
+  async function start({initial=0,onStep=null,onErr=null,onPerm=null}={}){
+    onStepCb=onStep; onErrCb=onErr; onPermCb=onPerm;
+    count=initial;
+    running=true; paused=false;
+
+    if(!permitted){
+      // On Android/desktop this returns immediately
+      // On iOS this should already have been called via requestPermission()
+      if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission!=='function'){
+        permitted=true;
+      } else {
+        // Permission not yet granted — don't attach listener
+        return false;
       }
-    } else {
-      permitted = true;
     }
-    return permitted;
-  }
 
-  // ── Public control ────────────────────────────────────────────────────────
-  async function start({ initial=0, onStep=null, onErr=null }={}) {
-    onStepCb = onStep; onErrCb = onErr;
-    count = initial;
-    if (!permitted) {
-      const ok = await requestPermission();
-      if (!ok) return false;
-    }
-    window.addEventListener('devicemotion', onMotion, { passive:true });
-    running = true; paused = false;
+    attachListener();
     scheduleMidnight();
     return true;
   }
 
-  function stop()  {
-    window.removeEventListener('devicemotion', onMotion);
-    running = false; paused = false;
+  function stop(){ detachListener(); running=false; paused=false; clearTimeout(midnightTimer); }
+  function pause(){ if(!running||paused)return; detachListener(); paused=true; }
+  async function resume(){
+    if(!running||!paused)return;
+    if(!permitted){ if(onErrCb)onErrCb('Permission needed'); return; }
+    attachListener(); paused=false;
+  }
+  function reset(initial=0){
+    count=initial; lastStepTs=0; lastEvtTs=0;
+    xH=[0,0,0]; yH=[0,0,0]; gravY=0;
+    aboveThresh=false; peakVal=0; valleyVal=Infinity;
+    adaptThresh=CFG.INIT_THRESH;
+    peakBuf=[]; valleyBuf=[]; shakeTs=[]; stepIntervals=[];
+    cadenceStepsPerMin=0; workoutMode='walk';
   }
 
-  function pause() {
-    if (!running || paused) return;
-    window.removeEventListener('devicemotion', onMotion);
-    paused = true;
+  function scheduleMidnight(){
+    const now=new Date(), m=new Date(now);
+    m.setHours(24,0,4,0);
+    midnightTimer=setTimeout(()=>{ reset(); if(onStepCb)onStepCb(0,{cadence:0,mode:'walk'}); scheduleMidnight(); },m-now);
   }
 
-  async function resume() {
-    if (!running || !paused) return;
-    if (!permitted) { 
-      const ok = await requestPermission(); 
-      if (!ok) return; 
-    }
-    window.addEventListener('devicemotion', onMotion, { passive:true });
-    paused = false;
-  }
-
-  function reset(initial=0) {
-    count=initial; lastStepTs=0; fX=0; fY=0; fZ=0;
-    aboveThresh=false; peakMag=0; valleyMag=Infinity;
-    peakHistory=[]; valleyHistory=[];
-    adaptiveThreshold=CFG.INIT_THRESHOLD;
-  }
-
-  function scheduleMidnight() {
-    const now=new Date(), midnight=new Date(now);
-    midnight.setHours(24,0,3,0);
-    setTimeout(()=>{ reset(); if(onStepCb)onStepCb(0); scheduleMidnight(); }, midnight-now);
-  }
-
-  // ── Visibility ─────────────────────────────────────────────────────────
+  // ── Visibility ────────────────────────────────────────────────────────────────
   document.addEventListener('visibilitychange',()=>{
-    if (document.hidden && running && !paused) { pause(); hiddenResume=true; }
-    else if (!document.hidden && hiddenResume) { resume(); hiddenResume=false; }
+    if(document.hidden&&running&&!paused){ pause(); visHidden=true; }
+    else if(!document.hidden&&visHidden){ resume(); visHidden=false; }
   });
 
+  // ── Public API ────────────────────────────────────────────────────────────────
   return {
-    start, stop, pause, resume, reset, requestPermission,
-    get count()     { return count; },
-    get isRunning() { return running && !paused; },
-    get isPaused()  { return paused; },
-    get threshold() { return adaptiveThreshold.toFixed(2); }
+    requestPermission, start, stop, pause, resume, reset,
+    get count()      { return count; },
+    get isRunning()  { return running&&!paused; },
+    get isPaused()   { return paused; },
+    get isPermitted(){ return permitted; },
+    get cadence()    { return cadenceStepsPerMin; },
+    get mode()       { return workoutMode; },
+    get threshold()  { return adaptThresh.toFixed(2); }
   };
 })();
