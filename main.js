@@ -1,389 +1,395 @@
 'use strict';
 
 /**
- * Vitalux v3 — Main Application Controller
- *
- * Tabs: Home · Steps · Nutrition · Weight · AI Coach · Summary · Settings
- * Navigation: Physics-based swipe + tap bottom nav
- * Features: Streaks, Goals, Light/Dark mode, Install prompt, Export, Reset
- * NEW: Fixed resume/pause, motion permission on first start, refined step logic
+ * Vitalux v3 — Main Controller
+ * Tabs: Home · Steps · Nutrition · Health · AI · Summary · Achievements · Settings
+ * Features: iOS permission modal, animated counters, water tracker, sleep,
+ *           meal breakdown, achievements, personal records, walk/run detection,
+ *           smart reminders, light/dark, install prompt, export/reset
  */
 const App = (() => {
 
-  // ── App state ──────────────────────────────────────────────────────────
-  let profile   = null;
-  let goals     = null;
-  let calData   = { intake:0, burned:0 };
-  let streak    = 0;
-  let tabIndex  = 0;
-  let aiSession = null;
-  let aiMsgIdx  = 0;
-  let aiTimer   = null;
-  let saveTimer = null;
-  let lastSaved = 0;
-  let deferredInstall = null;
+  // ── State ─────────────────────────────────────────────────────────────────────
+  let profile=null, goals=null;
+  let calData={intake:0,burned:0}, meals={breakfast:0,lunch:0,dinner:0,snacks:0};
+  let waterMl=0, sleepData={hours:0,quality:0};
+  let streak=0, tabIdx=0, lastSaved=0;
+  let aiSession=null, aiIdx=0, aiTimer=null;
+  let deferredInstall=null;
+  const TAB_IDS=['home','steps','nutrition','health','ai','summary','achievements','settings'];
+  const N_TABS=8;
 
-  const TAB_COUNT = 7;
-  const TAB_IDS   = ['home','steps','nutrition','weight','ai','summary','settings'];
+  // Swipe
+  let sw={startX:0,startY:0,dx:0,isH:false,isV:false,vel:0,lastX:0,lastT:0};
 
-  // ── Swipe state ─────────────────────────────────────────────────────────
-  let swipeStartX=0, swipeStartY=0, swipeDeltaX=0;
-  let isHSwipe=false, isVScroll=false;
-  let swipeVel=0, lastTouchX=0, lastTouchTime=0;
+  // Animated counter targets
+  const counterTargets={};
 
-  // ── DOM refs (cached after DOMContentLoaded) ──────────────────────────────────
-  let slider, viewport;
-
-  // ═══════════════════════════════════════════════════════════════
+  // ─────────────────────────────────────────────────────────────────────────────
   // INIT
-  // ═══════════════════════════════════════════════════════════════
-  async function init() {
-    slider   = document.getElementById('swipe-container');
-    viewport = document.getElementById('swipe-viewport');
+  // ─────────────────────────────────────────────────────────────────────────────
+  async function init(){
+    try{await StorageManager.init();}catch(e){console.error(e);}
 
-    try { await StorageManager.init(); } catch(e) { console.error('DB:', e); }
-
-    if ('serviceWorker' in navigator) {
+    if('serviceWorker' in navigator)
       navigator.serviceWorker.register('/service-worker.js').catch(()=>{});
-    }
 
-    // PWA install prompt
-    window.addEventListener('beforeinstallprompt', e => {
-      e.preventDefault(); deferredInstall = e;
-      showInstallBanner();
-    });
+    window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstall=e;showInstallBanner();});
 
-    // Chart defaults
-    if (window.Chart) ChartsManager.setupDefaults();
+    if(window.Chart) ChartsManager.defaults();
 
-    // Detect theme preference
-    const savedTheme = localStorage.getItem('theme') ||
-      (window.matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light');
-    setTheme(savedTheme, false);
+    const saved=localStorage.getItem('theme')||
+      (window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+    applyTheme(saved,false);
 
-    // Splash → boot
-    setTimeout(boot, 1900);
+    setTimeout(boot,2000);
   }
 
-  async function boot() {
-    profile = await StorageManager.getProfile();
-    goals   = await StorageManager.getGoals();
+  async function boot(){
+    profile=await StorageManager.getProfile();
+    goals=await StorageManager.getGoals();
+    document.getElementById('splash').classList.add('fade-out');
+    setTimeout(()=>document.getElementById('splash').style.display='none',500);
 
-    const splash = document.getElementById('splash');
-    splash.classList.add('fade-out');
-    setTimeout(() => splash.style.display='none', 500);
-
-    if (!profile) {
+    if(!profile){
       document.getElementById('onboarding').classList.remove('hidden');
-      initOnboarding();
+      initOB();
     } else {
       document.getElementById('app').classList.remove('hidden');
       await launchApp();
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
+  // ─────────────────────────────────────────────────────────────────────────────
   // ONBOARDING
-  // ═══════════════════════════════════════════════════════════════
-  let obStep = 0;
-
-  function initOnboarding() {
+  // ─────────────────────────────────────────────────────────────────────────────
+  let obStep=0;
+  function initOB(){
     showOBStep(0);
-    document.getElementById('ob-next').addEventListener('click', obNext);
-    document.getElementById('ob-back').addEventListener('click', obBack);
+    document.getElementById('ob-next').addEventListener('click',obNext);
+    document.getElementById('ob-back').addEventListener('click',()=>{if(obStep>0){obStep--;showOBStep(obStep);}});
   }
-
-  function showOBStep(s) {
-    document.querySelectorAll('.ob-step').forEach((el,i) => el.classList.toggle('active', i===s));
-    document.getElementById('ob-back').style.display = s===0?'none':'flex';
-    document.getElementById('ob-next').textContent   = s===4?'Get Started →':'Continue →';
-    document.getElementById('ob-progress-fill').style.width = ((s+1)/5*100)+'%';
+  function showOBStep(s){
+    document.querySelectorAll('.ob-step').forEach((el,i)=>el.classList.toggle('active',i===s));
+    document.getElementById('ob-back').style.display=s===0?'none':'flex';
+    document.getElementById('ob-next').textContent=s===4?'Start →':'Continue →';
+    document.getElementById('ob-prog-fill').style.width=((s+1)/5*100)+'%';
   }
-
-  function obNext() {
-    if (!obValidate(obStep)) return;
-    if (obStep===4) { finishOB(); return; }
+  function obNext(){
+    if(!obValidate(obStep)) return;
+    if(obStep===4){finishOB();return;}
     obStep++; showOBStep(obStep);
   }
-  function obBack() { if(obStep>0){obStep--;showOBStep(obStep);} }
-
-  function obValidate(s) {
+  function obValidate(s){
     let ok=true;
-    document.querySelectorAll(`.ob-step:nth-child(${s+1}) input,.ob-step:nth-child(${s+1}) select`).forEach(el=>{
-      if (!el.value||el.value.trim()==='') { el.classList.add('invalid'); setTimeout(()=>el.classList.remove('invalid'),1500); ok=false; }
+    document.querySelectorAll(`.ob-step.active input,.ob-step.active select`).forEach(el=>{
+      if(!el.value){el.classList.add('invalid');setTimeout(()=>el.classList.remove('invalid'),1500);ok=false;}
     });
     return ok;
   }
-
-  async function finishOB() {
-    const p = {
-      name:          document.getElementById('ob-name').value.trim(),
-      age:           +document.getElementById('ob-age').value,
-      height:        +document.getElementById('ob-height').value,
-      weight:        +document.getElementById('ob-weight').value,
-      gender:        document.getElementById('ob-gender').value,
-      goal:          document.getElementById('ob-goal').value,
-      activityLevel: document.getElementById('ob-activity').value,
-      createdAt:     Date.now()
+  async function finishOB(){
+    const p={
+      name:document.getElementById('ob-name').value.trim(),
+      age:+document.getElementById('ob-age').value,
+      height:+document.getElementById('ob-height').value,
+      weight:+document.getElementById('ob-weight').value,
+      gender:document.getElementById('ob-gender').value,
+      goal:document.getElementById('ob-goal').value,
+      activityLevel:document.getElementById('ob-activity').value,
+      createdAt:Date.now()
     };
-    const g = {
-      stepGoal:    +(document.getElementById('ob-stepgoal').value)||8000,
-      calorieGoal: AICoach.calorieGoal(p),
-      weightGoal:  null
+    const g={
+      id:1,
+      stepGoal:+(document.getElementById('ob-stepgoal').value)||8000,
+      calorieGoal:AICoach.calorieGoal(p),
+      waterGoal:AICoach.waterGoalMl(p.weight),
+      sleepGoal:8,
+      weightGoal:null
     };
     await StorageManager.saveProfile(p);
     await StorageManager.saveGoals(g);
-    profile = p; goals = g;
-
-    const ob  = document.getElementById('onboarding');
-    const app = document.getElementById('app');
-    ob.classList.add('fade-out');
-    setTimeout(()=>{ ob.style.display='none'; app.classList.remove('hidden'); launchApp(); }, 400);
+    profile=p; goals=g;
+    document.getElementById('onboarding').classList.add('fade-out');
+    setTimeout(()=>{
+      document.getElementById('onboarding').style.display='none';
+      document.getElementById('app').classList.remove('hidden');
+      launchApp();
+    },400);
   }
 
-  // ═══════════════════════════════════════════════════════════════
+  // ─────────────────────────────────────────────────────────────────────────────
   // LAUNCH
-  // ═══════════════════════════════════════════════════════════════
-  async function launchApp() {
-    calData = await StorageManager.getTodayCalories();
-    streak  = await StorageManager.calculateStreak();
+  // ─────────────────────────────────────────────────────────────────────────────
+  async function launchApp(){
+    [calData,meals,waterMl,sleepData,streak]=await Promise.all([
+      StorageManager.getTodayCalories(),
+      StorageManager.getTodayMeals(),
+      StorageManager.getTodayWater(),
+      StorageManager.getTodaySleep(),
+      StorageManager.calculateStreak()
+    ]);
 
-    // Start motion tracking (permission asked on first call)
-    const initSteps = await StorageManager.getTodaySteps();
-    await MotionTracker.start({
-      initial: initSteps,
-      onStep: onStepUpdate,
-      onErr:  e => console.warn('[Motion]', e)
+    const initSteps=await StorageManager.getTodaySteps();
+
+    // Try start tracking (non-iOS: auto, iOS: needs user gesture)
+    const started=await MotionTracker.start({
+      initial:initSteps,
+      onStep:onStepUpdate,
+      onErr:e=>console.warn('[Motion]',e),
+      onPerm:granted=>{
+        if(granted){document.getElementById('perm-modal')?.classList.add('hidden');toast('Step tracking started! 👟');}
+        else toast('Motion denied — enable in iOS Settings');
+      }
     });
 
-    // Build nav + swipe
+    // iOS needs explicit permission — show modal
+    if(!started && typeof DeviceMotionEvent!=='undefined' && typeof DeviceMotionEvent.requestPermission==='function'){
+      showPermModal();
+    }
+
     initNav();
     initSwipe();
-
-    // Initial renders
     await renderTab(0);
     setGreeting();
-
-    // Avatar initial
-    const av = document.getElementById('header-avatar');
-    if (av && profile.name) av.textContent = profile.name[0].toUpperCase();
-
-    // Auto-save steps every 15s
-    saveTimer = setInterval(autoPersist, 15000);
+    updateAvatar();
+    setInterval(autoPersist,15000);
+    setInterval(checkMidnightReset,60000);
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SWIPE NAVIGATION (Physics-based)
-  // ═══════════════════════════════════════════════════════════════
-  function initSwipe() {
-    viewport.addEventListener('touchstart', onTouchStart, { passive:true });
-    viewport.addEventListener('touchmove',  onTouchMove,  { passive:false });
-    viewport.addEventListener('touchend',   onTouchEnd,   { passive:true });
-    viewport.addEventListener('touchcancel',onTouchEnd,   { passive:true });
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PERMISSION MODAL (iOS)
+  // ─────────────────────────────────────────────────────────────────────────────
+  function showPermModal(){
+    const modal=document.getElementById('perm-modal');
+    if(!modal) return;
+    modal.classList.remove('hidden');
+    document.getElementById('perm-allow-btn').addEventListener('click',async()=>{
+      // MUST be called directly from click handler
+      const result=await MotionTracker.requestPermission();
+      if(result==='granted'){
+        const initSteps=await StorageManager.getTodaySteps();
+        MotionTracker.reset(initSteps);
+        await MotionTracker.start({initial:initSteps,onStep:onStepUpdate,onErr:e=>console.warn(e)});
+        modal.classList.add('hidden');
+        toast('Motion tracking active! 🚶');
+        await renderTab(tabIdx);
+      } else if(result==='denied'){
+        modal.classList.add('hidden');
+        toast('Permission denied. Enable in Settings → Privacy → Motion.');
+      }
+    });
+    document.getElementById('perm-skip-btn').addEventListener('click',()=>{
+      modal.classList.add('hidden');
+      toast('Tracking disabled. Tap the badge to re-enable.');
+    });
   }
 
-  function onTouchStart(e) {
-    swipeStartX = e.touches[0].clientX;
-    swipeStartY = e.touches[0].clientY;
-    swipeDeltaX = 0; isHSwipe = false; isVScroll = false;
-    swipeVel = 0; lastTouchX = swipeStartX; lastTouchTime = Date.now();
-    slider.style.transition = 'none';
-  }
-
-  function onTouchMove(e) {
-    if (isVScroll) return;
-    const dx = e.touches[0].clientX - swipeStartX;
-    const dy = e.touches[0].clientY - swipeStartY;
-
-    if (!isHSwipe && !isVScroll) {
-      if (Math.abs(dx) > Math.abs(dy)+6 && Math.abs(dx)>10) isHSwipe = true;
-      else if (Math.abs(dy) > Math.abs(dx)+6) { isVScroll = true; return; }
-      else return;
-    }
-
-    e.preventDefault();
-    swipeDeltaX = dx;
-
-    // Rubber-band at edges
-    let offset = dx;
-    if ((tabIndex===0 && dx>0) || (tabIndex===TAB_COUNT-1 && dx<0)) {
-      offset = dx * 0.12;
-    }
-
-    // Velocity tracking
-    const now = Date.now(); const dt = now - lastTouchTime;
-    if (dt>0) swipeVel = (e.touches[0].clientX - lastTouchX) / dt * 1000;
-    lastTouchX = e.touches[0].clientX; lastTouchTime = now;
-
-    // Glow
-    setSwipeGlow(dx);
-    applyTransform(offset, false);
-  }
-
-  function onTouchEnd() {
-    if (!isHSwipe) return;
-    clearSwipeGlow();
-
-    const w = window.innerWidth;
-    let next = tabIndex;
-
-    if      (swipeVel < -350 || swipeDeltaX < -w*0.28) next = Math.min(tabIndex+1, TAB_COUNT-1);
-    else if (swipeVel >  350 || swipeDeltaX >  w*0.28) next = Math.max(tabIndex-1, 0);
-
-    goToTab(next, true);
-  }
-
-  function applyTransform(extra=0, animated=false) {
-    const x = -(tabIndex * window.innerWidth) + extra;
-    slider.style.transition = animated ? 'transform 0.38s cubic-bezier(0.4,0,0.2,1)' : 'none';
-    slider.style.transform  = `translateX(${x}px)`;
-  }
-
-  function setSwipeGlow(dx) {
-    const glow = document.getElementById('swipe-glow');
-    if (!glow) return;
-    if (dx < -20) {
-      glow.style.right='0'; glow.style.left='auto'; glow.style.opacity='1';
-    } else if (dx > 20) {
-      glow.style.left='0'; glow.style.right='auto'; glow.style.opacity='1';
-    } else {
-      glow.style.opacity='0';
-    }
-  }
-  function clearSwipeGlow() {
-    const g = document.getElementById('swipe-glow');
-    if (g) g.style.opacity='0';
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  // NAVIGATION
-  // ═══════════════════════════════════════════════════════════════
-  function initNav() {
-    document.querySelectorAll('.nav-item').forEach(item => {
-      item.addEventListener('click', () => {
-        const idx = parseInt(item.dataset.idx);
-        if (idx !== tabIndex) goToTab(idx, true);
+  // ─────────────────────────────────────────────────────────────────────────────
+  // NAV + SWIPE
+  // ─────────────────────────────────────────────────────────────────────────────
+  function initNav(){
+    document.querySelectorAll('.nav-item').forEach(item=>{
+      item.addEventListener('click',()=>{
+        const idx=+item.dataset.idx;
+        if(idx!==tabIdx) goTo(idx,true);
       });
     });
   }
 
-  async function goToTab(idx, animated=false) {
-    const prev = tabIndex;
-    tabIndex = idx;
-    applyTransform(0, animated);
-    updateNavActive();
+  function initSwipe(){
+    const vp=document.getElementById('swipe-viewport');
+    vp.addEventListener('touchstart',e=>{
+      sw.startX=e.touches[0].clientX; sw.startY=e.touches[0].clientY;
+      sw.dx=0; sw.isH=false; sw.isV=false; sw.vel=0;
+      sw.lastX=sw.startX; sw.lastT=Date.now();
+      document.getElementById('swipe-container').style.transition='none';
+    },{passive:true});
+
+    vp.addEventListener('touchmove',e=>{
+      if(sw.isV) return;
+      const dx=e.touches[0].clientX-sw.startX;
+      const dy=e.touches[0].clientY-sw.startY;
+      if(!sw.isH&&!sw.isV){
+        if(Math.abs(dx)>Math.abs(dy)+5&&Math.abs(dx)>8) sw.isH=true;
+        else if(Math.abs(dy)>Math.abs(dx)+5){sw.isV=true;return;}
+        else return;
+      }
+      e.preventDefault(); sw.dx=dx;
+      let off=dx;
+      if((tabIdx===0&&dx>0)||(tabIdx===N_TABS-1&&dx<0)) off=dx*0.1;
+      const now=Date.now();
+      sw.vel=(e.touches[0].clientX-sw.lastX)/(now-sw.lastT)*1000;
+      sw.lastX=e.touches[0].clientX; sw.lastT=now;
+      setGlow(dx);
+      applyX(off,false);
+    },{passive:false});
+
+    vp.addEventListener('touchend',()=>{
+      if(!sw.isH){clearGlow();return;}
+      clearGlow();
+      const w=window.innerWidth;
+      let next=tabIdx;
+      if(sw.vel<-300||sw.dx<-w*0.25) next=Math.min(tabIdx+1,N_TABS-1);
+      else if(sw.vel>300||sw.dx>w*0.25) next=Math.max(tabIdx-1,0);
+      goTo(next,true);
+    },{passive:true});
+  }
+
+  function applyX(extra=0,animated=false){
+    const sl=document.getElementById('swipe-container');
+    sl.style.transition=animated?'transform 0.36s cubic-bezier(0.4,0,0.2,1)':'none';
+    sl.style.transform=`translateX(${-(tabIdx*window.innerWidth)+extra}px)`;
+  }
+
+  function setGlow(dx){
+    const g=document.getElementById('swipe-glow');
+    if(!g) return;
+    if(dx<-15){g.setAttribute('data-dir','right');g.style.opacity='1';}
+    else if(dx>15){g.setAttribute('data-dir','left');g.style.opacity='1';}
+    else g.style.opacity='0';
+  }
+  function clearGlow(){const g=document.getElementById('swipe-glow');if(g)g.style.opacity='0';}
+
+  async function goTo(idx,animated=false){
+    tabIdx=idx;
+    applyX(0,animated);
+    document.querySelectorAll('.nav-item').forEach((el,i)=>el.classList.toggle('active',i===idx));
     await renderTab(idx);
-
-    // Haptic-like flash
-    const navItem = document.querySelector(`.nav-item[data-idx="${idx}"]`);
-    if (navItem) { navItem.classList.add('tapped'); setTimeout(()=>navItem.classList.remove('tapped'),300); }
+    const ni=document.querySelector(`.nav-item[data-idx="${idx}"]`);
+    if(ni){ni.classList.add('tapped');setTimeout(()=>ni.classList.remove('tapped'),280);}
   }
 
-  function updateNavActive() {
-    document.querySelectorAll('.nav-item').forEach((item,i) => {
-      item.classList.toggle('active', i===tabIndex);
-    });
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  // TAB RENDERS
-  // ═══════════════════════════════════════════════════════════════
-  async function renderTab(idx) {
-    switch(TAB_IDS[idx]) {
-      case 'home':       await renderHome();       break;
-      case 'steps':      await renderSteps();      break;
-      case 'nutrition':  await renderNutrition();  break;
-      case 'weight':     await renderWeight();     break;
-      case 'ai':         await renderAICoach();    break;
-      case 'summary':    await renderSummary();    break;
-      case 'settings':   renderSettings();         break;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // TAB ROUTING
+  // ─────────────────────────────────────────────────────────────────────────────
+  async function renderTab(idx){
+    switch(TAB_IDS[idx]){
+      case 'home':         await renderHome();         break;
+      case 'steps':        await renderSteps();        break;
+      case 'nutrition':    await renderNutrition();    break;
+      case 'health':       await renderHealth();       break;
+      case 'ai':           await renderAI();           break;
+      case 'summary':      await renderSummary();      break;
+      case 'achievements': await renderAchievements(); break;
+      case 'settings':     renderSettings();           break;
     }
   }
 
-  // ── HOME ───────────────────────────────────────────────────────────
-  async function renderHome() {
-    const steps  = MotionTracker.count;
-    const sg     = goals.stepGoal || 8000;
-    const pct    = Math.min(steps/sg, 1);
-    const burned = AICoach.caloriesBurned(steps, profile.weight, profile.activityLevel);
-    const calPct = calorieData().intake > 0 ? Math.min(calorieData().intake/goals.calorieGoal, 1) : 0;
-    const [wTrend, streak2] = await Promise.all([StorageManager.getWeightTrend(), StorageManager.calculateStreak()]);
-    streak = streak2;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // HOME
+  // ─────────────────────────────────────────────────────────────────────────────
+  async function renderHome(){
+    const steps=MotionTracker.count;
+    const sg=goals.stepGoal||8000;
+    const pct=Math.min(steps/sg,1);
+    const burned=AICoach.caloriesBurnedByMode(steps,profile.weight,MotionTracker.mode);
+    const cg=goals.calorieGoal||2000;
+    const wg=goals.waterGoal||2500;
+    const calPct=Math.min((calData.intake||0)/cg,1);
+    const watPct=Math.min((waterMl||0)/wg,1);
 
-    // Triple rings
-    setRing('ring-steps',    pct);
-    setRing('ring-calories', calPct);
-    const wPct = wTrend.latest && profile.weight ? Math.min(Math.abs(profile.weight - wTrend.latest)/5, 1) : 0;
-    setRing('ring-active', 1 - wPct);
+    setRing('ring-steps',pct);
+    setRing('ring-cal',calPct);
+    setRing('ring-water',watPct);
 
-    set('home-steps',   steps.toLocaleString());
-    set('home-sg',      `/ ${sg.toLocaleString()}`);
-    set('home-pct',     Math.round(pct*100)+'%');
-    set('home-burned',  burned.toLocaleString()+' kcal');
-    set('home-intake',  (calorieData().intake||0).toLocaleString()+' kcal');
-    set('home-streak',  streak);
-    set('home-motive',  motivation(pct, steps));
+    animCounter('home-steps',steps);
+    set('home-sg','/ '+sg.toLocaleString()+' steps');
+    set('home-pct',Math.round(pct*100)+'%');
+    animCounter('home-burned',burned);
+    set('home-burned-unit','kcal');
+    animCounter('home-intake',calData.intake||0);
+    set('home-intake-unit','kcal');
+    set('home-streak',streak);
+    set('home-motive',motiveTxt(pct,steps));
     setGreeting();
-
-    // Streak dots (last 7 days)
     await renderStreakDots();
+
+    // Workout mode badge
+    const mb=document.getElementById('home-mode-badge');
+    if(mb){ mb.textContent=MotionTracker.mode==='run'?'🏃 Running':'🚶 Walking'; mb.className='mode-badge '+(MotionTracker.mode==='run'?'mode-run':'mode-walk'); }
   }
 
-  async function renderStreakDots() {
-    const container = document.getElementById('streak-dots');
-    if (!container) return;
-    const sg   = goals.stepGoal || 8000;
-    const hist = await StorageManager.getStepsHistory(7);
-    container.innerHTML = hist.map(d => {
-      const hit = d.count >= sg;
-      return `<div class="streak-dot ${hit?'hit':d.count>0?'partial':'miss'}" title="${d.date}: ${d.count} steps"></div>`;
-    }).join('');
+  async function renderStreakDots(){
+    const el=document.getElementById('streak-dots');
+    if(!el) return;
+    const sg=goals.stepGoal||8000;
+    const hist=await StorageManager.getStepsHistory(7);
+    el.innerHTML=hist.map(d=>`<div class="sdot ${d.count>=sg?'hit':d.count>0?'partial':'miss'}"></div>`).join('');
   }
 
-  function setRing(id, pct) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const r = parseFloat(el.getAttribute('r'));
-    const c = 2*Math.PI*r;
-    el.style.strokeDasharray  = c;
-    el.style.strokeDashoffset = c*(1-Math.min(pct,1));
-  }
+  // ─────────────────────────────────────────────────────────────────────────────
+  // STEPS
+  // ─────────────────────────────────────────────────────────────────────────────
+  async function renderSteps(){
+    const steps=MotionTracker.count;
+    const sg=goals.stepGoal||8000;
+    const pct=Math.min(steps/sg,1);
+    const mode=MotionTracker.mode;
+    const burned=AICoach.caloriesBurnedByMode(steps,profile.weight,mode);
+    const dist=(steps*0.000762).toFixed(2);
+    const mins=Math.round(steps/100);
 
-  // ── STEPS ───────────────────────────────────────────────────────────
-  async function renderSteps() {
-    const steps  = MotionTracker.count;
-    const sg     = goals.stepGoal || 8000;
-    const pct    = Math.min(steps/sg, 1);
-    const burned = AICoach.caloriesBurned(steps, profile.weight, profile.activityLevel);
-    const dist   = (steps*0.000762).toFixed(2);
-    const mins   = Math.round(steps/100);
+    setRing('steps-ring-prog',pct);
+    animCounter('steps-count',steps);
+    set('steps-goal-n',sg.toLocaleString());
+    set('steps-pct-val',Math.round(pct*100)+'%');
+    animCounter('steps-burned',burned);
+    set('steps-burned-u','kcal');
+    set('steps-dist',dist+' km');
+    set('steps-time',mins+' min');
+    set('steps-cadence',MotionTracker.cadence?(MotionTracker.cadence+' steps/min'):'—');
+    set('steps-mode-val',mode==='run'?'🏃 Running':'🚶 Walking');
+    set('steps-thresh',MotionTracker.threshold+' m/s²');
 
-    setRing('steps-ring-prog', pct);
-    set('steps-count',  steps.toLocaleString());
-    set('steps-goal-n', sg.toLocaleString());
-    set('steps-pct',    Math.round(pct*100)+'%');
-    set('steps-burned', burned.toLocaleString()+' kcal');
-    set('steps-dist',   dist+' km');
-    set('steps-time',   mins+' min');
-    set('steps-thresh', MotionTracker.threshold+' m/s²');
-
-    // Status badge
-    const badge = document.getElementById('steps-badge');
-    if (badge) {
-      const on=MotionTracker.isRunning, pause=MotionTracker.isPaused;
-      badge.textContent  = on?'● Tracking':pause?'⏸ Paused':'◉ Inactive';
-      badge.className    = 'badge '+( on?'badge-green':pause?'badge-orange':'badge-gray');
+    // Status
+    const badge=document.getElementById('steps-badge');
+    if(badge){
+      const on=MotionTracker.isRunning, p=MotionTracker.isPaused;
+      badge.textContent=on?'● Tracking Active':p?'⏸ Paused':'◉ Stopped';
+      badge.className='badge '+(on?'badge-green':p?'badge-orange':'badge-gray');
     }
 
-    const btn = document.getElementById('steps-toggle');
-    if (btn) btn.textContent = MotionTracker.isPaused ? '▶ Resume' : '⏸ Pause';
-
-    if (!document.getElementById('steps-toggle').dataset.bound) {
-      document.getElementById('steps-toggle').dataset.bound='1';
-      document.getElementById('steps-toggle').addEventListener('click', toggleTracking);
+    // Permission state
+    const permBtn=document.getElementById('steps-perm-btn');
+    if(permBtn){
+      if(!MotionTracker.isPermitted && typeof DeviceMotionEvent!=='undefined' && typeof DeviceMotionEvent.requestPermission==='function'){
+        permBtn.style.display='flex';
+        if(!permBtn.dataset.bound){
+          permBtn.dataset.bound='1';
+          permBtn.addEventListener('click',async()=>{
+            const r=await MotionTracker.requestPermission();
+            if(r==='granted'){
+              const init=await StorageManager.getTodaySteps();
+              MotionTracker.reset(init);
+              await MotionTracker.start({initial:init,onStep:onStepUpdate,onErr:e=>console.warn(e)});
+              permBtn.style.display='none';
+              await renderSteps();
+              toast('Motion sensor active 🎉');
+            } else {
+              toast('Denied — allow in Settings → Privacy → Motion & Fitness');
+            }
+          });
+        }
+      } else {
+        permBtn.style.display='none';
+      }
     }
 
-    if (window.Chart) {
+    // Toggle btn
+    const btn=document.getElementById('steps-toggle');
+    if(btn){
+      btn.textContent=MotionTracker.isPaused?'▶ Resume':'⏸ Pause';
+      if(!btn.dataset.bound){
+        btn.dataset.bound='1';
+        btn.addEventListener('click',async()=>{
+          if(MotionTracker.isPaused) await MotionTracker.resume();
+          else MotionTracker.pause();
+          await renderSteps();
+        });
+      }
+    }
+
+    if(window.Chart){
       await Promise.allSettled([
         ChartsManager.dailySteps('chart-daily-steps'),
         ChartsManager.weeklySteps('chart-weekly-steps')
@@ -391,368 +397,421 @@ const App = (() => {
     }
   }
 
-  async function toggleTracking() {
-    if (MotionTracker.isPaused) await MotionTracker.resume();
-    else MotionTracker.pause();
-    await renderSteps();
-  }
+  // ─────────────────────────────────────────────────────────────────────────────
+  // NUTRITION
+  // ─────────────────────────────────────────────────────────────────────────────
+  async function renderNutrition(){
+    const steps=MotionTracker.count;
+    const burned=AICoach.caloriesBurnedByMode(steps,profile.weight,MotionTracker.mode);
+    calData.burned=burned;
+    const total=Object.values(meals).reduce((s,v)=>s+(+v||0),0);
+    const cg=goals.calorieGoal||2000;
+    const balance=total-burned;
 
-  // ── NUTRITION ─────────────────────────────────────────────────────────
-  async function renderNutrition() {
-    const steps  = MotionTracker.count;
-    const burned = AICoach.caloriesBurned(steps, profile.weight, profile.activityLevel);
-    calData.burned = burned;
-    const intake  = calData.intake||0;
-    const balance = intake - burned;
-    const cg      = goals.calorieGoal || 2000;
-    const bmrVal  = AICoach.bmr(profile);
-    const tdeeVal = AICoach.tdee(bmrVal, profile.activityLevel||'moderate');
+    set('nutr-total',total.toLocaleString()+' kcal');
+    set('nutr-burned',burned.toLocaleString()+' kcal');
+    set('nutr-goal',cg.toLocaleString()+' kcal');
+    set('nutr-bmr',AICoach.bmr(profile).toLocaleString()+' kcal/day');
+    set('nutr-tdee',AICoach.tdee(AICoach.bmr(profile),profile.activityLevel).toLocaleString()+' kcal/day');
 
-    set('nutr-intake',  intake.toLocaleString()+' kcal');
-    set('nutr-burned',  burned.toLocaleString()+' kcal');
-    set('nutr-goal',    cg.toLocaleString()+' kcal');
-    set('nutr-bmr',     bmrVal.toLocaleString()+' kcal/day');
-    set('nutr-tdee',    tdeeVal.toLocaleString()+' kcal/day');
-
-    const balEl = document.getElementById('nutr-balance');
-    if (balEl) {
-      balEl.textContent = (balance>0?'+':'')+Math.round(balance)+' kcal';
-      balEl.className   = balance>100?'balance-val surplus':balance<-50?'balance-val deficit':'balance-val balanced';
+    const balEl=document.getElementById('nutr-balance');
+    if(balEl){
+      balEl.textContent=(balance>0?'+':'')+Math.round(balance)+' kcal';
+      balEl.className='balance-val '+(balance>100?'surplus':balance<-50?'deficit':'balanced');
     }
 
-    // Input binding
-    const inp = document.getElementById('nutr-input');
-    if (inp && !inp.dataset.bound) {
-      inp.dataset.bound='1';
-      inp.value = calData.intake||'';
-      const save = async () => {
-        const v=parseInt(inp.value)||0;
-        calData.intake=v;
-        await StorageManager.saveTodayCalories({...calData});
-        await renderNutrition();
-      };
-      document.getElementById('nutr-save').addEventListener('click',save);
-      inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){inp.blur();save();} });
-    }
-
-    if (window.Chart) await ChartsManager.calories('chart-calories');
-  }
-
-  // ── WEIGHT ──────────────────────────────────────────────────────────
-  async function renderWeight() {
-    const history = await StorageManager.getWeightHistory(30);
-    const trend   = await StorageManager.getWeightTrend();
-    const latest  = trend.latest || profile.weight;
-    const bmi     = (latest / Math.pow(profile.height/100, 2)).toFixed(1);
-
-    set('wt-current',  latest+' kg');
-    set('wt-start',    profile.weight+' kg');
-    set('wt-change',   (trend.delta>0?'+':'')+trend.delta+' kg');
-    set('wt-bmi',      bmi);
-    set('wt-bmi-label', bmiLabel(+bmi));
-
-    const trendBadge = document.getElementById('wt-trend');
-    if (trendBadge) {
-      const lbl = trend.direction==='losing'?'↘ Losing':trend.direction==='gaining'?'↗ Gaining':'→ Stable';
-      trendBadge.textContent = lbl;
-      trendBadge.className   = 'trend-badge trend-'+trend.direction;
-    }
-
-    // Log form
-    const wtIn  = document.getElementById('wt-input');
-    const wtBtn = document.getElementById('wt-log-btn');
-    if (wtBtn && !wtBtn.dataset.bound) {
-      wtBtn.dataset.bound='1';
-      wtBtn.addEventListener('click', async () => {
-        const v=parseFloat(wtIn.value);
-        if (!v||v<20||v>300) { wtIn.classList.add('invalid'); setTimeout(()=>wtIn.classList.remove('invalid'),1000); return; }
-        await StorageManager.addWeightEntry(v);
-        wtIn.value='';
-        toast('Weight logged 💪');
-        await renderWeight();
-      });
-    }
-
-    if (window.Chart) await ChartsManager.weightTrend('chart-weight');
-  }
-
-  // ── AI COACH ──────────────────────────────────────────────────────────
-  async function renderAICoach() {
-    // Only start a new session if not already running
-    if (aiTimer !== null) return;
-
-    const chatEl = document.getElementById('ai-chat');
-    if (!chatEl) return;
-    chatEl.innerHTML = '';
-
-    // Gather data
-    const [wTrend, weekInsights] = await Promise.all([
-      StorageManager.getWeightTrend(), StorageManager.getWeeklyInsights()
-    ]);
-
-    const data = {
-      steps:          MotionTracker.count,
-      goals,
-      calories:       calData,
-      trend:          wTrend,
-      streak,
-      profile,
-      weeklyInsights: weekInsights
-    };
-
-    aiSession = AICoach.generateSession(data);
-    aiMsgIdx  = 0;
-    scheduleNextAIMessage();
-  }
-
-  function scheduleNextAIMessage() {
-    if (aiMsgIdx >= aiSession.length) { aiTimer=null; return; }
-    const msg = aiSession[aiMsgIdx];
-
-    aiTimer = setTimeout(() => {
-      showTyping();
-      aiTimer = setTimeout(() => {
-        hideTyping();
-        appendAIMessage(msg.text);
-        aiMsgIdx++;
-        aiTimer = null;
-        scheduleNextAIMessage();
-      }, msg.think || 1400);
-    }, aiMsgIdx===0 ? msg.delay : msg.delay);
-  }
-
-  function showTyping() {
-    const chatEl = document.getElementById('ai-chat');
-    if (!chatEl) return;
-    const div = document.createElement('div');
-    div.className = 'ai-msg ai-msg-thinking'; div.id='ai-typing';
-    div.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
-    chatEl.appendChild(div);
-    chatEl.scrollTop = chatEl.scrollHeight;
-  }
-
-  function hideTyping() {
-    document.getElementById('ai-typing')?.remove();
-  }
-
-  function appendAIMessage(text) {
-    const chatEl = document.getElementById('ai-chat');
-    if (!chatEl) return;
-    const div = document.createElement('div');
-    div.className = 'ai-msg ai-msg-in';
-    // Convert **bold** to <strong>
-    div.innerHTML = text.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
-    chatEl.appendChild(div);
-    chatEl.scrollTop = chatEl.scrollHeight;
-  }
-
-  // ── SUMMARY ──────────────────────────────────────────────────────────
-  async function renderSummary() {
-    const [wTrend, weekInsights] = await Promise.all([
-      StorageManager.getWeightTrend(), StorageManager.getWeeklyInsights()
-    ]);
-
-    const steps   = MotionTracker.count;
-    const sg      = goals.stepGoal || 8000;
-    const burned  = AICoach.caloriesBurned(steps, profile.weight, profile.activityLevel);
-
-    // Today tiles
-    set('sum-steps',   steps.toLocaleString());
-    set('sum-burned',  burned.toLocaleString()+' kcal');
-    set('sum-intake',  (calData.intake||0).toLocaleString()+' kcal');
-    set('sum-streak',  streak+' days');
-
-    // Weekly summary bullets
-    const summaryLines  = AICoach.weeklyText(weekInsights, profile, streak);
-    const summaryEl = document.getElementById('sum-text');
-    if (summaryEl) {
-      summaryEl.innerHTML = summaryLines.map(l=>
-        `<p>${l.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')}</p>`
-      ).join('');
-    }
-
-    // Smart insights
-    const insights = AICoach.smartInsights(weekInsights, profile, goals);
-    const insEl    = document.getElementById('sum-insights');
-    if (insEl) {
-      insEl.innerHTML = insights.map(({icon,text,type})=>
-        `<div class="insight-item insight-${type}"><span class="insight-icon">${icon}</span><span class="insight-text">${text}</span></div>`
-      ).join('');
-    }
-
-    if (window.Chart) await ChartsManager.summarySteps('chart-summary-steps');
-  }
-
-  // ── SETTINGS ──────────────────────────────────────────────────────────
-  function renderSettings() {
-    // Pre-fill profile fields
-    const fields = { 'set-name':profile.name, 'set-age':profile.age,
-      'set-height':profile.height, 'set-weight':profile.weight,
-      'set-gender':profile.gender, 'set-activity':profile.activityLevel,
-      'set-goal':profile.goal, 'set-stepgoal':goals.stepGoal,
-      'set-calgoal':goals.calorieGoal };
-
-    Object.entries(fields).forEach(([id,val])=>{
-      const el=document.getElementById(id); if(el) el.value=val||'';
-    });
-
-    // Theme toggle
-    const themeToggle = document.getElementById('toggle-theme');
-    const currentTheme = document.documentElement.dataset.theme;
-    if (themeToggle) themeToggle.classList.toggle('on', currentTheme==='light');
-
-    // Tracking toggle
-    const trackToggle = document.getElementById('toggle-tracking');
-    if (trackToggle) trackToggle.classList.toggle('on', MotionTracker.isRunning);
-
-    // Bind once
-    if (!document.getElementById('set-save').dataset.bound) {
-      document.getElementById('set-save').dataset.bound='1';
-      document.getElementById('set-save').addEventListener('click', saveSettings);
-      document.getElementById('btn-export').addEventListener('click', exportData);
-      document.getElementById('btn-reset').addEventListener('click', confirmReset);
-
-      if (themeToggle) themeToggle.addEventListener('click', ()=>{
-        const next = document.documentElement.dataset.theme==='dark'?'light':'dark';
-        setTheme(next,true); themeToggle.classList.toggle('on', next==='light');
-      });
-
-      if (trackToggle) trackToggle.addEventListener('click', async ()=>{
-        if (MotionTracker.isRunning) MotionTracker.pause();
-        else await MotionTracker.resume();
-        trackToggle.classList.toggle('on', MotionTracker.isRunning);
-      });
-    }
-  }
-
-  async function saveSettings() {
-    const updated = {
-      ...profile,
-      name:          document.getElementById('set-name').value.trim(),
-      age:           +document.getElementById('set-age').value,
-      height:        +document.getElementById('set-height').value,
-      weight:        +document.getElementById('set-weight').value,
-      gender:        document.getElementById('set-gender').value,
-      activityLevel: document.getElementById('set-activity').value,
-      goal:          document.getElementById('set-goal').value,
-    };
-    const updatedGoals = {
-      ...goals,
-      stepGoal:    +(document.getElementById('set-stepgoal').value)||8000,
-      calorieGoal: +(document.getElementById('set-calgoal').value)||2000,
-    };
-    await StorageManager.saveProfile(updated);
-    await StorageManager.saveGoals(updatedGoals);
-    profile = updated; goals = updatedGoals;
-    toast('Settings saved ✓');
-    const av=document.getElementById('header-avatar');
-    if(av&&profile.name) av.textContent=profile.name[0].toUpperCase();
-  }
-
-  async function exportData() {
-    const json = await StorageManager.exportAllData();
-    const blob = new Blob([json],{type:'application/json'});
-    const a    = document.createElement('a');
-    a.href     = URL.createObjectURL(blob);
-    a.download = `vitalux-export-${StorageManager.today()}.json`;
-    a.click();
-    toast('Data exported 📦');
-  }
-
-  async function confirmReset() {
-    const confirmed = confirm('This will delete ALL your data permanently. Are you sure?');
-    if (!confirmed) return;
-    await StorageManager.clearAll();
-    MotionTracker.reset(0);
-    profile = null; goals = null;
-    location.reload();
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  // UTILITIES
-  // ═══════════════════════════════════════════════════════════════
-  function set(id, text) { const el=document.getElementById(id); if(el) el.textContent=text; }
-
-  function calorieData() { return calData; }
-
-  function setGreeting() {
-    const h=new Date().getHours();
-    const t=h<5?'night':h<12?'morning':h<17?'afternoon':'evening';
-    const name=profile?.name?`, ${profile.name.split(' ')[0]}`:'';
-    set('greeting', `Good ${t}${name}.`);
-  }
-
-  function motivation(pct, steps) {
-    if (pct>=1)    return 'You hit your goal! Extraordinary. 🏆';
-    if (pct>=0.75) return 'Almost there — one last push!';
-    if (pct>=0.5)  return 'Halfway done. Keep the pace! 💪';
-    if (pct>=0.25) return 'Good start. Lots of day left.';
-    if (steps>0)   return 'Every step counts. Keep moving.';
-    return 'Tap Start to begin tracking.';
-  }
-
-  function bmiLabel(b) {
-    return b<18.5?'Underweight':b<25?'Healthy Weight':b<30?'Overweight':'Obese';
-  }
-
-  function setTheme(t, save=true) {
-    document.documentElement.dataset.theme = t;
-    if(save) localStorage.setItem('theme',t);
-    if(window.Chart) ChartsManager.setupDefaults();
-  }
-
-  // ── Step callback ────────────────────────────────────────────────────────
-  function onStepUpdate(count) {
-    if (tabIndex===0) requestAnimationFrame(renderHome);
-    else if (tabIndex===1) requestAnimationFrame(renderSteps);
-  }
-
-  // ── Auto-persist steps ──────────────────────────────────────────────────────
-  async function autoPersist() {
-    const count = MotionTracker.count;
-    if (count !== lastSaved) {
-      await StorageManager.saveTodaySteps(count);
-      const burned = AICoach.caloriesBurned(count, profile.weight, profile.activityLevel);
-      calData.burned = burned;
-      await StorageManager.saveTodayCalories({...calData});
-      lastSaved = count;
-    }
-  }
-
-  // ── Install banner ────────────────────────────────────────────────────────
-  function showInstallBanner() {
-    const banner = document.getElementById('install-banner');
-    if (!banner) return;
-    banner.classList.add('show');
-    document.getElementById('install-btn')?.addEventListener('click', async () => {
-      if (deferredInstall) {
-        deferredInstall.prompt();
-        const { outcome } = await deferredInstall.userChoice;
-        if (outcome==='accepted') banner.classList.remove('show');
-        deferredInstall = null;
-      } else {
-        // iOS: show instructions
-        alert('To install: tap the Share button → "Add to Home Screen"');
+    // Meal inputs
+    ['breakfast','lunch','dinner','snacks'].forEach(m=>{
+      const inp=document.getElementById(`meal-${m}`);
+      if(inp&&!inp.dataset.bound){
+        inp.dataset.bound='1';
+        inp.value=meals[m]||'';
+        inp.addEventListener('change',async()=>{
+          meals[m]=+inp.value||0;
+          const total=Object.values(meals).reduce((s,v)=>s+(+v||0),0);
+          calData.intake=total;
+          await Promise.all([StorageManager.saveTodayMeals({...meals}),StorageManager.saveTodayCalories({...calData})]);
+          await renderNutrition();
+        });
       }
     });
-    document.getElementById('install-close')?.addEventListener('click', () => {
-      banner.classList.remove('show');
-    });
+
+    // Macro ring (estimated)
+    const macro=AICoach.macroSplit(profile.goal||'maintain');
+    set('macro-protein',macro.protein+'%');
+    set('macro-carbs',macro.carbs+'%');
+    set('macro-fat',macro.fat+'%');
+
+    if(window.Chart) await ChartsManager.calories('chart-calories');
   }
 
-  // ── Toast ───────────────────────────────────────────────────────────
-  function toast(msg, dur=2800) {
-    document.querySelector('.toast')?.remove();
-    const el = document.createElement('div');
-    el.className='toast'; el.textContent=msg;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // HEALTH (Weight + Sleep + Water + Body Measurements)
+  // ─────────────────────────────────────────────────────────────────────────────
+  async function renderHealth(){
+    const [trend,records]=await Promise.all([StorageManager.getWeightTrend(),StorageManager.getPersonalRecords()]);
+    const latest=trend.latest||profile.weight;
+    const bmiVal=AICoach.bmi(latest,profile.height);
+
+    // Weight
+    set('h-wt-current',latest+' kg');
+    set('h-wt-change',(trend.delta>0?'+':'')+trend.delta+' kg');
+    set('h-bmi',bmiVal.toFixed(1));
+    set('h-bmi-label',AICoach.bmiLabel(bmiVal));
+    const tb=document.getElementById('h-wt-trend');
+    if(tb){tb.textContent=trend.direction==='losing'?'↘ Losing':trend.direction==='gaining'?'↗ Gaining':'→ Stable';tb.className='trend-badge trend-'+trend.direction;}
+
+    // Weight log
+    const wi=document.getElementById('h-wt-input');
+    const wb=document.getElementById('h-wt-btn');
+    if(wb&&!wb.dataset.bound){
+      wb.dataset.bound='1';
+      wb.addEventListener('click',async()=>{
+        const v=parseFloat(wi.value);
+        if(!v||v<20||v>300){wi.classList.add('invalid');setTimeout(()=>wi.classList.remove('invalid'),1000);return;}
+        await StorageManager.addWeightEntry(v);
+        wi.value=''; toast('Weight logged 💪'); await renderHealth();
+      });
+    }
+
+    // Water
+    const wg=goals.waterGoal||2500;
+    const watPct=Math.min(waterMl/wg,1);
+    setRing('water-ring-prog',watPct);
+    set('h-water-ml',waterMl+' ml');
+    set('h-water-goal',wg+' ml goal');
+    set('h-water-pct',Math.round(watPct*100)+'%');
+
+    // Water buttons (already bound check)
+    document.querySelectorAll('.water-add-btn').forEach(btn=>{
+      if(!btn.dataset.bound){
+        btn.dataset.bound='1';
+        btn.addEventListener('click',async()=>{
+          waterMl+=+(btn.dataset.ml||250);
+          await StorageManager.saveTodayWater(waterMl);
+          toast(`+${btn.dataset.ml} ml 💧`);
+          await renderHealth();
+        });
+      }
+    });
+
+    // Sleep
+    const si=document.getElementById('h-sleep-hours');
+    const sq=document.getElementById('h-sleep-quality');
+    const sb=document.getElementById('h-sleep-save');
+    if(si&&!si.value) si.value=sleepData.hours||'';
+    if(sq&&!sq.value) sq.value=sleepData.quality||'';
+    if(sb&&!sb.dataset.bound){
+      sb.dataset.bound='1';
+      sb.addEventListener('click',async()=>{
+        const h=parseFloat(si.value)||0, q=+sq.value||0;
+        if(h<0||h>24||q<0||q>5){toast('Invalid sleep data');return;}
+        await StorageManager.saveSleep(h,q);
+        sleepData={hours:h,quality:q};
+        toast('Sleep logged 😴'); await renderHealth();
+      });
+    }
+
+    // Records
+    if(records.bestStepDay) set('rec-best-steps',records.bestStepDay.count.toLocaleString()+' steps on '+records.bestStepDay.date);
+    if(records.longestStreak) set('rec-streak',records.longestStreak+' days');
+    if(records.minWeight&&records.minWeight.value) set('rec-lowest-wt',records.minWeight.value+' kg');
+    if(records.maxWeight&&records.maxWeight.value) set('rec-highest-wt',records.maxWeight.value+' kg');
+
+    if(window.Chart){
+      await Promise.allSettled([
+        ChartsManager.weightTrend('chart-weight'),
+        ChartsManager.waterHistory('chart-water'),
+        ChartsManager.sleepHistory('chart-sleep')
+      ]);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // AI COACH
+  // ─────────────────────────────────────────────────────────────────────────────
+  async function renderAI(){
+    if(aiTimer!==null) return; // session in progress
+    const chatEl=document.getElementById('ai-chat');
+    if(!chatEl) return;
+    chatEl.innerHTML='';
+
+    const [wTrend,weekIns]=await Promise.all([StorageManager.getWeightTrend(),StorageManager.getWeeklyInsights()]);
+    const data={
+      steps:MotionTracker.count, goals, calories:calData,
+      trend:wTrend, streak, profile,
+      weeklyInsights:weekIns,
+      water:waterMl, sleep:sleepData,
+      mode:MotionTracker.mode
+    };
+    aiSession=AICoach.generateSession(data);
+    aiIdx=0;
+    nextAIMsg();
+  }
+
+  function nextAIMsg(){
+    if(aiIdx>=aiSession.length){aiTimer=null;return;}
+    const msg=aiSession[aiIdx];
+    aiTimer=setTimeout(()=>{
+      showTyping();
+      aiTimer=setTimeout(()=>{
+        hideTyping(); appendMsg(msg.text); aiIdx++;
+        aiTimer=null; nextAIMsg();
+      },msg.think||1200);
+    },aiIdx===0?msg.delay||400:msg.delay||1600);
+  }
+
+  function showTyping(){
+    const el=document.getElementById('ai-chat');
+    if(!el) return;
+    const d=document.createElement('div');
+    d.className='ai-bubble ai-thinking'; d.id='ai-typing';
+    d.innerHTML='<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+    el.appendChild(d); el.scrollTop=el.scrollHeight;
+  }
+  function hideTyping(){document.getElementById('ai-typing')?.remove();}
+  function appendMsg(text){
+    const el=document.getElementById('ai-chat');
+    if(!el) return;
+    const d=document.createElement('div');
+    d.className='ai-bubble ai-in';
+    d.innerHTML=text.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+    el.appendChild(d); el.scrollTop=el.scrollHeight;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SUMMARY
+  // ─────────────────────────────────────────────────────────────────────────────
+  async function renderSummary(){
+    const [wTrend,weekIns]=await Promise.all([StorageManager.getWeightTrend(),StorageManager.getWeeklyInsights()]);
+    const steps=MotionTracker.count;
+    const burned=AICoach.caloriesBurnedByMode(steps,profile.weight,MotionTracker.mode);
+
+    set('sum-steps',steps.toLocaleString()); set('sum-burned',burned.toLocaleString()+' kcal');
+    set('sum-intake',(calData.intake||0).toLocaleString()+' kcal'); set('sum-streak',streak+' days');
+    set('sum-water',waterMl+' ml'); set('sum-sleep',sleepData.hours?sleepData.hours+'h':'—');
+
+    const txtEl=document.getElementById('sum-text');
+    if(txtEl){
+      const lines=AICoach.weeklyText(weekIns,profile,streak);
+      txtEl.innerHTML=lines.map(l=>`<p>${l.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')}</p>`).join('');
+    }
+
+    const insEl=document.getElementById('sum-insights');
+    if(insEl){
+      const items=AICoach.smartInsights(weekIns,profile,goals);
+      insEl.innerHTML=items.map(({icon,text,type})=>`<div class="insight insight-${type}"><span>${icon}</span><span class="insight-txt">${text}</span></div>`).join('');
+    }
+
+    if(window.Chart) await ChartsManager.summarySteps('chart-summary-steps');
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ACHIEVEMENTS
+  // ─────────────────────────────────────────────────────────────────────────────
+  async function renderAchievements(){
+    const [ach,records]=await Promise.all([StorageManager.getAchievements(),StorageManager.getPersonalRecords()]);
+    const el=document.getElementById('ach-grid');
+    if(!el) return;
+
+    el.innerHTML=ach.map(a=>`
+      <div class="ach-card ${a.unlocked?'unlocked':'locked'}">
+        <div class="ach-icon">${a.icon}</div>
+        <div class="ach-name">${a.name}</div>
+        <div class="ach-desc">${a.desc}</div>
+        ${a.unlocked?'<div class="ach-check">✓</div>':''}
+      </div>
+    `).join('');
+
+    // Records
+    if(records.bestStepDay) set('rec-best',records.bestStepDay.count.toLocaleString()+' steps');
+    set('rec-streak-all',records.longestStreak+' days');
+    set('rec-streak-cur',records.currentStreak+' days');
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SETTINGS
+  // ─────────────────────────────────────────────────────────────────────────────
+  function renderSettings(){
+    const f={
+      'set-name':profile.name,'set-age':profile.age,'set-height':profile.height,
+      'set-weight':profile.weight,'set-gender':profile.gender,'set-activity':profile.activityLevel,
+      'set-goal':profile.goal,'set-stepgoal':goals.stepGoal,'set-calgoal':goals.calorieGoal,
+      'set-watergoal':goals.waterGoal,'set-sleepgoal':goals.sleepGoal
+    };
+    Object.entries(f).forEach(([id,v])=>{const el=document.getElementById(id);if(el)el.value=v||'';});
+
+    const th=document.getElementById('toggle-theme');
+    const tr=document.getElementById('toggle-tracking');
+    if(th) th.classList.toggle('on',document.documentElement.dataset.theme==='light');
+    if(tr) tr.classList.toggle('on',MotionTracker.isRunning);
+
+    if(!document.getElementById('set-save').dataset.bound){
+      document.getElementById('set-save').dataset.bound='1';
+      document.getElementById('set-save').addEventListener('click',saveSettings);
+      document.getElementById('btn-export').addEventListener('click',exportData);
+      document.getElementById('btn-reset').addEventListener('click',confirmReset);
+      if(th) th.addEventListener('click',()=>{
+        const n=document.documentElement.dataset.theme==='dark'?'light':'dark';
+        applyTheme(n,true); th.classList.toggle('on',n==='light');
+      });
+      if(tr) tr.addEventListener('click',async()=>{
+        if(MotionTracker.isRunning) MotionTracker.pause();
+        else await MotionTracker.resume();
+        tr.classList.toggle('on',MotionTracker.isRunning);
+      });
+    }
+  }
+
+  async function saveSettings(){
+    const up={...profile,
+      name:document.getElementById('set-name').value.trim(),
+      age:+document.getElementById('set-age').value,
+      height:+document.getElementById('set-height').value,
+      weight:+document.getElementById('set-weight').value,
+      gender:document.getElementById('set-gender').value,
+      activityLevel:document.getElementById('set-activity').value,
+      goal:document.getElementById('set-goal').value,
+    };
+    const ug={...goals,
+      stepGoal:+(document.getElementById('set-stepgoal').value)||8000,
+      calorieGoal:+(document.getElementById('set-calgoal').value)||2000,
+      waterGoal:+(document.getElementById('set-watergoal').value)||2500,
+      sleepGoal:+(document.getElementById('set-sleepgoal').value)||8,
+    };
+    await Promise.all([StorageManager.saveProfile(up),StorageManager.saveGoals(ug)]);
+    profile=up; goals=ug; updateAvatar();
+    toast('Settings saved ✓');
+  }
+
+  async function exportData(){
+    const json=await StorageManager.exportAllData();
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([json],{type:'application/json'}));
+    a.download=`vitalux-${StorageManager.today()}.json`;
+    a.click(); toast('Data exported 📦');
+  }
+
+  async function confirmReset(){
+    if(!confirm('Delete ALL data permanently?')) return;
+    await StorageManager.clearAll();
+    MotionTracker.stop(); location.reload();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // UTILITIES
+  // ─────────────────────────────────────────────────────────────────────────────
+  function set(id,text){const el=document.getElementById(id);if(el)el.textContent=text;}
+
+  // Animated number counter
+  function animCounter(id,target){
+    const el=document.getElementById(id);
+    if(!el) return;
+    const start=+(el.textContent.replace(/,/g,''))||0;
+    if(start===target){el.textContent=target.toLocaleString();return;}
+    const dur=600, steps=20, delta=(target-start)/steps, step=dur/steps;
+    let cur=start, i=0;
+    const interval=setInterval(()=>{
+      cur+=delta; i++;
+      el.textContent=Math.round(cur).toLocaleString();
+      if(i>=steps){el.textContent=target.toLocaleString();clearInterval(interval);}
+    },step);
+  }
+
+  function setRing(id,pct){
+    const el=document.getElementById(id);
+    if(!el) return;
+    const r=+el.getAttribute('r');
+    const c=2*Math.PI*r;
+    el.style.strokeDasharray=c;
+    el.style.strokeDashoffset=c*(1-Math.min(pct,1));
+  }
+
+  function setGreeting(){
+    const h=new Date().getHours();
+    const t=h<5?'night':h<12?'morning':h<17?'afternoon':'evening';
+    const n=profile?.name?`, ${profile.name.split(' ')[0]}`:'';
+    set('greeting',`Good ${t}${n}.`);
+  }
+
+  function updateAvatar(){
+    const av=document.getElementById('header-avatar');
+    if(av&&profile?.name) av.textContent=profile.name[0].toUpperCase();
+  }
+
+  function motiveTxt(pct,steps){
+    if(pct>=1)    return 'Goal crushed! Extraordinary work. 🏆';
+    if(pct>=0.75) return 'Almost there — push through!';
+    if(pct>=0.5)  return 'Halfway — maintain the pace. 💪';
+    if(pct>=0.25) return 'Good start. Keep moving.';
+    if(steps>0)   return 'Every step counts. Go!';
+    return 'Tap Steps to begin tracking.';
+  }
+
+  function applyTheme(t,save=true){
+    document.documentElement.dataset.theme=t;
+    if(save)localStorage.setItem('theme',t);
+    if(window.Chart)ChartsManager.defaults();
+  }
+
+  function onStepUpdate(count,meta){
+    if(tabIdx===0) requestAnimationFrame(renderHome);
+    else if(tabIdx===1) requestAnimationFrame(renderSteps);
+  }
+
+  async function autoPersist(){
+    const c=MotionTracker.count;
+    if(c!==lastSaved){
+      const burned=AICoach.caloriesBurnedByMode(c,profile.weight,MotionTracker.mode);
+      calData.burned=burned;
+      await Promise.all([StorageManager.saveTodaySteps(c),StorageManager.saveTodayCalories({...calData})]);
+      lastSaved=c;
+      streak=await StorageManager.calculateStreak();
+    }
+  }
+
+  async function checkMidnightReset(){
+    const today=StorageManager.today();
+    const saved=localStorage.getItem('lastActiveDay');
+    if(saved&&saved!==today){
+      waterMl=0; sleepData={hours:0,quality:0};
+      meals={breakfast:0,lunch:0,dinner:0,snacks:0};
+      localStorage.setItem('lastActiveDay',today);
+    } else if(!saved){
+      localStorage.setItem('lastActiveDay',today);
+    }
+  }
+
+  // Install banner
+  function showInstallBanner(){
+    const b=document.getElementById('install-banner');
+    if(!b) return;
+    b.classList.add('show');
+    document.getElementById('install-btn')?.addEventListener('click',async()=>{
+      if(deferredInstall){
+        deferredInstall.prompt();
+        const{outcome}=await deferredInstall.userChoice;
+        if(outcome==='accepted')b.classList.remove('show');
+        deferredInstall=null;
+      } else {
+        toast('In Safari: Share → Add to Home Screen');
+      }
+    });
+    document.getElementById('install-close')?.addEventListener('click',()=>b.classList.remove('show'));
+  }
+
+  function toast(msg,dur=2800){
+    document.querySelector('.toast-msg')?.remove();
+    const el=document.createElement('div');
+    el.className='toast-msg'; el.textContent=msg;
     document.body.appendChild(el);
     requestAnimationFrame(()=>{
       el.classList.add('show');
-      setTimeout(()=>{ el.classList.remove('show'); setTimeout(()=>el.remove(),400); }, dur);
+      setTimeout(()=>{el.classList.remove('show');setTimeout(()=>el.remove(),400);},dur);
     });
   }
 
-  return { init };
+  return {init};
 })();
 
-document.addEventListener('DOMContentLoaded', () => App.init());
+document.addEventListener('DOMContentLoaded',()=>App.init());
