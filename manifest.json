@@ -1,19 +1,48 @@
 {
-  "name": "Vitalux — AI Fitness",
+  "name": "Vitalux — AI Fitness Pro",
   "short_name": "Vitalux",
-  "description": "Premium AI-powered fitness tracker: steps, calories, weight, coaching.",
+  "description": "Premium AI-powered fitness tracker: steps, calories, hydration, sleep, weight, coaching.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#050508",
-  "theme_color": "#050508",
+  "background_color": "#030306",
+  "theme_color": "#030306",
   "lang": "en",
   "categories": ["health", "fitness", "lifestyle"],
   "icons": [
-    { "src":"icons/icon-192.png",        "sizes":"192x192", "type":"image/png", "purpose":"any maskable" },
-    { "src":"icons/icon-512.png",        "sizes":"512x512", "type":"image/png", "purpose":"any maskable" },
-    { "src":"icons/apple-touch-icon.png","sizes":"180x180", "type":"image/png", "purpose":"any" }
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
   ],
-  "prefer_related_applications": false
+  "prefer_related_applications": false,
+  "shortcuts": [
+    {
+      "name": "Log Steps",
+      "short_name": "Steps",
+      "url": "/?tab=steps",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "AI Coach",
+      "short_name": "AI Coach",
+      "url": "/?tab=ai",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
 }
